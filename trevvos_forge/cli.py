@@ -1,3 +1,5 @@
+from typing import Annotated
+
 import typer
 from rich.console import Console
 
@@ -49,6 +51,34 @@ def ask(question: str) -> None:
     except ForgeError as exc:
         console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
         raise typer.Exit(code=1)
+
+@app.command()
+def generate(
+    instruction: str,
+    language: Annotated[
+        str | None,
+        typer.Option("--language", "-l", help="Target programming language.")
+    ] = None,
+) -> None:
+    """
+    Generate code using your local LLM.
+    """
+    try:
+        engine = build_engine()
+
+        with console.status("[bold]Generating code with your local LLM...[/bold]", spinner="dots"):
+            result = engine.generate_code(
+                instruction=instruction,
+                language=language
+            )
+
+        console.print(result)
+
+    except ForgeError as exc:
+        console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+        raise typer.Exit(code=1)
+
+
 
 def main() -> None:
     app()

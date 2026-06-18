@@ -1,6 +1,5 @@
-import sys
-
 import typer
+from rich.console import Console
 
 from trevvos_forge.engine import TrevvosForgeEngine
 from trevvos_forge.exceptions import ForgeError
@@ -12,6 +11,8 @@ app = typer.Typer(
     help="Trevvos Forge: local-first AI engineering assistant.",
     no_args_is_help=True
 )
+
+console = Console()
 
 @app.callback()
 def callback() -> None:
@@ -39,10 +40,14 @@ def ask(question: str) -> None:
     """
     try:
         engine = build_engine()
-        answer = engine.ask(question)
-        typer.echo(answer)
+
+        with console.status("[bold]Thinking with your local LLM...[/bold]", spinner="dots"):
+            answer = engine.ask(question)
+
+        console.print(answer)
+
     except ForgeError as exc:
-        typer.echo(f"[trevvos-forge] {exc}", err=True)
+        console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
         raise typer.Exit(code=1)
 
 def main() -> None:

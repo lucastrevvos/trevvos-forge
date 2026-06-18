@@ -2,6 +2,15 @@ from dataclasses import dataclass
 
 import requests
 
+from trevvos_forge.exceptions import (
+    ProviderConnectionError,
+    ProviderHttpError,
+    ProviderResponseError,
+    ProviderTimeoutError
+)
+
+
+
 @dataclass
 class OllamaProvider:
     model: str
@@ -17,9 +26,36 @@ class OllamaProvider:
             "stream": False
         }
 
-        response = requests.post(url, json=payload, timeout=self.timeout)
-        response.raise_for_status()
+        try:
+            response = requests.post(url, json=payload, timeout=self.timeout)
+        except requests.exceptions.ConnectionError as exc:
+            raise ProviderConnectionError(
+                f"Não consegui conectar ao Ollama em {self.base_url}. "
+                "Verifique se o Ollama está rodando."
+            ) from exc
 
-        data = response.json()
+        except requests.exceptions.Timeout as exc:
+            raise ProviderTimeoutError(
+                f"Ollama demorou mais que {self.timeout} segundos para responder."
+            ) from exc
 
-        return data["response"].strip()
+        except requests.exceptions.RequestException as exc:
+            raise ProviderConnectionError(
+                f"Erro inesperado ao chamar o Ollama em {self.base_url}"
+            ) from exc
+
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise ProviderResponseError(
+                "Ollama retornou uma resposta que não é um JSON válido."
+            ) from exc
+
+        generated_text = data.get("response")
+
+        if not isinstance(generated_text, str):
+            raise ProviderResponseError(
+                "Ollama retornou uma resposta inesperada: campo 'response' ausente ou inválido."
+            )
+
+        return generated_text.strip()

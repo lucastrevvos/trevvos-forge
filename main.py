@@ -1,4 +1,7 @@
+import sys
+
 from trevvos_forge.engine import TrevvosForgeEngine
+from trevvos_forge.exceptions import ForgeError
 from trevvos_forge.providers.ollama import OllamaProvider
 from trevvos_forge.settings import ForgeSettings
 
@@ -34,4 +37,8 @@ def main() -> None:
     print(generated_code)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ForgeError as exc:
+        print(f"[trevvos-forge] {exc}", file=sys.stderr)
+        raise SystemExit(1)

@@ -12,7 +12,8 @@ authors = [
     { name = "Lucas Amaral" }
 ]
 dependencies = [
-    "requests>=2.31.0"
+    "requests>=2.31.0",
+    "typer>=0.12.3"
 ]
 
 keywords = [
@@ -33,6 +34,9 @@ classifiers = [
     "Topic :: Software Development :: Code Generators",
     "Topic :: Software Development :: Libraries :: Python Modules"
 ]
+
+[project.scripts]
+trevvos = "trevvos_forge.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

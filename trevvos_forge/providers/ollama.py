@@ -40,7 +40,7 @@ class OllamaProvider:
             ) from exc
 
         except requests.exceptions.RequestException as exc:
-            raise ProviderConnectionError(
+            raise ProviderHttpError(
                 f"Erro inesperado ao chamar o Ollama em {self.base_url}"
             ) from exc
 

@@ -1,0 +1,16 @@
+README.md
+pyproject.toml
+trevvos_forge/__init__.py
+trevvos_forge/engine.py
+trevvos_forge/exceptions.py
+trevvos_forge/ollama_client.py
+trevvos_forge/prompts.py
+trevvos_forge/settings.py
+trevvos_forge.egg-info/PKG-INFO
+trevvos_forge.egg-info/SOURCES.txt
+trevvos_forge.egg-info/dependency_links.txt
+trevvos_forge.egg-info/requires.txt
+trevvos_forge.egg-info/top_level.txt
+trevvos_forge/providers/__init__.py
+trevvos_forge/providers/base.py
+trevvos_forge/providers/ollama.py

@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=69.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trevvos-forge"
+version = "0.1.0-alpha.1"
+description = "Local-first AI engineering engine powered by local LLMs."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Lucas Amaral" }
+]
+dependencies = [
+    "requests>=2.31.0"
+]
+
+keywords = [
+    "ai",
+    "llm",
+    "local-llm",
+    "developer-tools",
+    "code-generation",
+    "ollama"
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Software Development :: Libraries :: Python Modules"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["trevvos_forge*"]

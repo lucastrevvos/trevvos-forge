@@ -1,0 +1,42 @@
+Metadata-Version: 2.4
+Name: trevvos-forge
+Version: 0.1.0a1
+Summary: Local-first AI engineering engine powered by local LLMs.
+Author: Lucas Amaral
+Keywords: ai,llm,local-llm,developer-tools,code-generation,ollama
+Classifier: Development Status :: 3 - Alpha
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Intended Audience :: Developers
+Classifier: Topic :: Software Development :: Code Generators
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: requests>=2.31.0
+
+# Trevvos Forge
+
+Trevvos Forge is a local-first AI engineering engine powered by local LLMs.
+
+The goal is to provide a developer tool that can:
+
+- ask technical questions using local models;
+- generate code from prompts;
+- understand project structure;
+- propose safe changes;
+- generate diffs before applying modifications.
+
+The project currently uses Ollama as the first local LLM provider.
+
+## Status
+
+Early alpha.
+
+## Local development
+
+Install in editable mode:
+
+```bash
+python -m pip install -e .
+```

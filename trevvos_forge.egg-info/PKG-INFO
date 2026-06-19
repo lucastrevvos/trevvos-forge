@@ -66,3 +66,11 @@ Pull a model using Ollama:
 ```bash
 trevvos models pull qwen2.5-coder:1.5b
 ```
+
+Setup your local environment:
+
+```bash
+trevvos setup
+
+trevvos setup --model qwen2.5-coder:1.5b
+```

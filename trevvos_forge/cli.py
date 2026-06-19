@@ -167,6 +167,36 @@ def list_models() -> None:
         console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
         raise typer.Exit(code=1)
 
+@models_app.command("pull")
+def pull_model(model: str) -> None:
+    """
+    Pull a model using Ollama.
+    """
+    try:
+        settings = load_settings()
+        provider = build_provider(settings)
+
+        console.print(f"[bold]Pulling model:[/bold] {model}")
+        console.print("[yellow]This can take a while depending on the model size.[/yellow]\n")
+
+        with console.status("[bold]Downloading model with Ollama...[/bold]", spinner="dots"):
+            status = provider.pull_model(model)
+
+        console.print(f"\n[green]Model pull finished:[/green] {status}")
+        console.print(f"Model: [bold]{model}[/bold]")
+
+        if model != settings.model:
+            console.print(
+                "\n[yellow]Note:[/yellow] this model was downloaded, but it is not your configured default model."
+            )
+            console.print(
+                f"To use it temporarily:\n  TREVVOS_FORGE_MODEL=\"{model}\" trevvos ask \"hello\""
+            )
+
+    except ForgeError as exc:
+        console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+        raise typer.Exit(code=1)
+
 
 def main() -> None:
     app()

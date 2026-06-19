@@ -129,3 +129,51 @@ class OllamaProvider:
 
         return target_model in self.list_models()
 
+
+
+    def pull_model(self, model: str) -> str:
+        url = f"{self.base_url}/api/pull"
+
+        payload = {
+            "model": model,
+            "stream": False,
+        }
+
+        try:
+            response = requests.post(url, json=payload, timeout=self.timeout)
+        except requests.exceptions.ConnectionError as exc:
+            raise ProviderConnectionError(
+                f"Não consegui conectar ao Ollama em {self.base_url}. "
+                "Verifique se o Ollama está rodando."
+            ) from exc
+        except requests.exceptions.Timeout as exc:
+            raise ProviderTimeoutError(
+                f"Ollama demorou mais que {self.timeout} segundos para responder."
+            ) from exc
+        except requests.exceptions.RequestException as exc:
+            raise ProviderConnectionError(
+                f"Erro inesperado ao chamar o Ollama em {self.base_url}."
+            ) from exc
+
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as exc:
+            raise ProviderHttpError(
+                f"Ollama retornou erro HTTP {response.status_code} ao baixar o modelo {model}."
+            ) from exc
+
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise ProviderResponseError(
+                "Ollama retornou uma resposta inválida ao baixar modelo."
+            ) from exc
+
+        status = data.get("status")
+
+        if not isinstance(status, str):
+            raise ProviderResponseError(
+                "Ollama retornou uma resposta inesperada: campo 'status' ausente ou inválido."
+            )
+
+        return status

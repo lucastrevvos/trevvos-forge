@@ -41,3 +41,9 @@ List local Ollama models:
 ```bash
 trevvos models list
 ```
+
+Pull a model using Ollama:
+
+```bash
+trevvos models pull qwen2.5-coder:1.5b
+```

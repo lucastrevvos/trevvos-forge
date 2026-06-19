@@ -42,3 +42,9 @@ Install in editable mode:
 ```bash
 python -m pip install -e .
 ```
+
+Generate code:
+
+```bash
+trevvos generate "create a function that validates an email" --language python
+```

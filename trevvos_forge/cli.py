@@ -23,14 +23,19 @@ def callback() -> None:
     """
     pass
 
-def build_engine() -> TrevvosForgeEngine:
-    settings = ForgeSettings.from_env()
+def load_settings() -> ForgeSettings:
+    return ForgeSettings.from_env()
 
-    provider = OllamaProvider(
+def build_provider(settings: ForgeSettings) -> OllamaProvider:
+    return OllamaProvider(
         model=settings.model,
         base_url=settings.base_url,
         timeout=settings.timeout
     )
+
+def build_engine() -> TrevvosForgeEngine:
+    settings = load_settings()
+    provider = build_provider(settings)
 
     return TrevvosForgeEngine(provider=provider)
 
@@ -78,7 +83,49 @@ def generate(
         console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
         raise typer.Exit(code=1)
 
+@app.command()
+def doctor() -> None:
+    """
+    Check Trevvos Forge local environment.
+    """
+    try:
+        settings = load_settings()
+        provider = build_provider(settings)
 
+        console.print("[bold]Trevvos Forge Doctor[/bold]\n")
+
+        console.print("[bold]Settings[/bold]")
+        console.print(f"   Model:    {settings.model}")
+        console.print(f"   Base URL:    {settings.base_url}")
+        console.print(f"   Timeout:    {settings.timeout}s")
+
+        with console.status("[bold]Checking Ollama...[/bold]", spinner="dots"):
+            models = provider.list_models()
+
+        console.print("\n[bold]Ollama[/bold]")
+        console.print("   Status:   [green]OK[/green]")
+        console.print(f"   Models:   {len(models)} found")
+
+        if models:
+            console.print("\n[bold]Installed models[/bold]")
+            for model in models:
+                marker = "[green]*[/green]" if model == settings.model else "-"
+                console.print(f"   {marker} {model}")
+
+        if settings.model in models:
+            console.print("\n[green]Environment OK. Trevvos Forge is ready.[/green]")
+        else:
+            console.print(
+                f"\n[yellow]Configured model was not found:[/yellow] {settings.model}"
+            )
+            console.print(
+                "Run `ollama list` to see available models or set TREVVOS_FORGE_MODEL."
+            )
+            raise typer.Exit(code=1)
+
+    except ForgeError as exc:
+        console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+        raise typer.Exit(code=1)
 
 def main() -> None:
     app()

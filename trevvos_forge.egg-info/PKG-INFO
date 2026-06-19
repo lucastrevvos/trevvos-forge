@@ -48,3 +48,9 @@ Generate code:
 ```bash
 trevvos generate "create a function that validates an email" --language python
 ```
+
+Check your local environment:
+
+```bash
+trevvos doctor
+```

@@ -14,6 +14,14 @@ app = typer.Typer(
     no_args_is_help=True
 )
 
+models_app = typer.Typer(
+    name="models",
+    help="Manage local LLM models.",
+    no_args_is_help=True
+)
+
+app.add_typer(models_app, name="models")
+
 console = Console()
 
 @app.callback()
@@ -126,6 +134,39 @@ def doctor() -> None:
     except ForgeError as exc:
         console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
         raise typer.Exit(code=1)
+
+@models_app.command("list")
+def list_models() -> None:
+    """
+    List local models available in Ollama.
+    """
+    try:
+        settings = load_settings()
+        provider = build_provider(settings)
+
+        with console.status("[bold]Listing local models...[/bold]", spinner="dots"):
+            models = provider.list_models()
+
+        console.print("[bold]Local Ollama models[/bold]\n")
+
+        if not models:
+            console.print("[yellow]No models found.[/yellow]")
+            console.print("Install one with Ollama, for example:")
+            console.print("   ollama pull qwen2.5-coder:7b")
+            raise typer.Exit(code=1)
+
+        for model in models:
+            marker = "[green]*[/green]" if model == settings.model else "-"
+            console.print(f"   {marker} {model}")
+
+        console.print(
+            f"\nConfigured model: [bold]{settings.model}[/bold]"
+        )
+
+    except ForgeError as exc:
+        console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+        raise typer.Exit(code=1)
+
 
 def main() -> None:
     app()

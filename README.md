@@ -35,3 +35,9 @@ Check your local environment:
 ```bash
 trevvos doctor
 ```
+
+List local Ollama models:
+
+```bash
+trevvos models list
+```

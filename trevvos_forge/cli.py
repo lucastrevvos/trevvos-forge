@@ -135,6 +135,83 @@ def doctor() -> None:
         console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
         raise typer.Exit(code=1)
 
+@app.command()
+def setup(
+    model: Annotated[
+        str | None,
+        typer.Option("--model", "-m", help="Model to check or pull during setup.")
+    ] = None
+) -> None:
+    """
+    Setup Trevvos Forge local environment.
+    """
+    try:
+        settings = load_settings()
+        target_model = model or settings.model
+
+        provider = OllamaProvider(
+            model=target_model,
+            base_url=settings.base_url,
+            timeout=settings.timeout
+        )
+
+        console.print("[bold]Trevvos Forge Setup[/bold]\n")
+
+        console.print("[bold]Settings[/bold]")
+        console.print(f"  Base URL: {settings.base_url}")
+        console.print(f"  Timeout:  {settings.timeout}s")
+        console.print(f"  Model:    {target_model}")
+
+        with console.status("[bold]Checking Ollama...[/bold]", spinner="dots"):
+            models = provider.list_models()
+
+        console.print("\n[bold]Ollama[/bold]")
+        console.print("  Status: [green]OK[/green]")
+
+        if target_model in models:
+            console.print(
+                f"\n[green]Model already available:[/green] [bold]{target_model}[/bold]"
+            )
+            console.print("[green]Setup complete. Trevvos Forge is ready.[/green]")
+            return
+
+        console.print(
+            f"\n[yellow]Model not found locally:[/yellow] [bold]{target_model}[/bold]"
+        )
+
+        should_pull = typer.confirm(
+            f"Do you want to pull {target_model} now?",
+            default=False
+        )
+
+        if not should_pull:
+            console.print("\n[yellow]Setup stopped.[/yellow]")
+            console.print("You can pull the model later with:")
+            console.print(f"  trevvos models pull {target_model}")
+            raise typer.Exit(code=1)
+
+        console.print(f"\n[bold]Pulling model:[/bold] {target_model}")
+        console.print("[yellow]This can take a while depending on the model size.[/yellow]\n")
+
+        with console.status("[bold]Downloading model with Ollama...[/bold]", spinner="dots"):
+            status = provider.pull_model(target_model)
+
+        console.print(f"\n[green]Model pull finished:[/green] {status}")
+        console.print(f"[green]Setup complete.[/green] Model ready: [bold]{target_model}[/bold]")
+
+        if model and model != settings.model:
+            console.print(
+                "\n[yellow]Note:[/yellow] this model was downloaded, but it is not your default model."
+            )
+            console.print("To use it temporarily:")
+            console.print(f'  TREVVOS_FORGE_MODEL="{model}" trevvos ask "hello"')
+
+    except ForgeError as exc:
+        console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+        console.print("\nIf Ollama is not running, start it and try again:")
+        console.print("  ollama serve")
+        raise typer.Exit(code=1)
+
 @models_app.command("list")
 def list_models() -> None:
     """

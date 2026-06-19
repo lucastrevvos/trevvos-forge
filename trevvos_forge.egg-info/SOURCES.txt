@@ -7,6 +7,7 @@ trevvos_forge/exceptions.py
 trevvos_forge/ollama_client.py
 trevvos_forge/prompts.py
 trevvos_forge/settings.py
+trevvos_forge/workspace.py
 trevvos_forge.egg-info/PKG-INFO
 trevvos_forge.egg-info/SOURCES.txt
 trevvos_forge.egg-info/dependency_links.txt

@@ -55,3 +55,11 @@ trevvos setup
 
 trevvos setup --model qwen2.5-coder:1.5b
 ```
+
+Scan a local project:
+
+```bash
+trevvos scan
+
+trevvos scan ./my-project --max-files 100
+```

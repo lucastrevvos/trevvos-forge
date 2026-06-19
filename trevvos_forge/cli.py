@@ -2,11 +2,16 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from pathlib import Path
+from rich.table import Table
+
 
 from trevvos_forge.engine import TrevvosForgeEngine
 from trevvos_forge.exceptions import ForgeError
 from trevvos_forge.providers.ollama import OllamaProvider
 from trevvos_forge.settings import ForgeSettings
+
+from trevvos_forge.workspace import scan_workspace
 
 app = typer.Typer(
     name = "trevvos",
@@ -211,6 +216,69 @@ def setup(
         console.print("\nIf Ollama is not running, start it and try again:")
         console.print("  ollama serve")
         raise typer.Exit(code=1)
+
+@app.command()
+def scan(path: Annotated[
+        Path,
+        typer.Argument(help="Workspace path to scan.")
+    ] = Path("."),
+    max_files: Annotated[
+        int,
+        typer.Option("--max-files", help="Maxium number of files to show.")
+    ] = 200,
+) -> None:
+    """
+    Scan a project workspace without modifying files.
+    """
+    try:
+        with console.status("[bold]Scanning workspace...[/bold]", spinner="dots"):
+            result = scan_workspace(path, max_files=max_files)
+
+        console.print("[bold]Trevvos Forge Workspace Scan[/bold]\n")
+
+        console.print("[bold]Root[/bold]")
+        console.print(f"  {result.root}")
+
+        console.print("\n[bold]Detected stacks[/bold]")
+        for stack in result.detected_stacks:
+            console.print(f"   - {stack}")
+
+        console.print("\n[bold]Summary[/bold]")
+        console.print(f"  Files seen:      {result.total_files_seen}")
+        console.print(f"  Files displayed: {len(result.files)}")
+        console.print(f"  Directories:     {len(result.directories)}")
+
+        if result.important_files:
+            console.print("\n[bold]Important files[/bold]")
+            for file_path in result.important_files:
+                console.print(f"    - {file_path}")
+
+        table = Table(title="Files")
+        table.add_column("Path", overflow="fold")
+        table.add_column("Ext")
+        table.add_column("Size")
+
+        for file in result.files[:50]:
+            table.add_row(
+                file.path,
+                file.extension or "-",
+                f"{file.size_bytes} bytes",
+            )
+
+        console.print()
+        console.print(table)
+
+        if len(result.files) > 50:
+            console.print(
+                f"\n[yellow]Showing first 50 files. Use --max-files to control scan size.[/yellow]"
+            )
+
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+        raise typer.Exit(code=1)
+
+
+
 
 @models_app.command("list")
 def list_models() -> None:

@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-
 IGNORED_DIRS = {
     ".git",
     ".venv",
@@ -37,13 +36,11 @@ IMPORTANT_FILES = {
     "build.gradle",
 }
 
-
 @dataclass(frozen=True)
 class ProjectFile:
     path: str
     extension: str
     size_bytes: int
-
 
 @dataclass(frozen=True)
 class ProjectScanResult:
@@ -53,7 +50,6 @@ class ProjectScanResult:
     important_files: list[str]
     directories: list[str]
     detected_stacks: list[str]
-
 
 def scan_workspace(root: Path, max_files: int = 200) -> ProjectScanResult:
     resolved_root = root.resolve()
@@ -159,3 +155,37 @@ def _should_ignore(relative_path: Path) -> bool:
 
 def _unique(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))
+
+def format_workspace_context(scan: ProjectScanResult, max_files) -> str:
+    important_files = "\n".join(f"- {path}" for path in scan.important_files) or "- none"
+
+    directories = "\n".join(f"- {path}" for path in scan.directories[:50]) or "- none"
+
+    files = "\n".join(
+        f"- {file.path} ({file.size_bytes} bytes)"
+        for file in scan.files[:max_files]
+    ) or "- none"
+
+    stacks = "\n".join(f"- {stack}" for stack in scan.detected_stacks)
+
+    return f"""
+Workspace root:
+{scan.root}
+
+Detected stacks:
+{stacks}
+
+Summary:
+- Files seen: {scan.total_files_seen}
+- Files included in context: {min(len(scan.files), max_files)}
+- Directories found: {len(scan.directories)}
+
+Important files:
+{important_files}
+
+Directories:
+{directories}
+
+Files:
+{files}
+""".strip()

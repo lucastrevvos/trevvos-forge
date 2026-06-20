@@ -8,10 +8,12 @@ from rich.table import Table
 
 from trevvos_forge.engine import TrevvosForgeEngine
 from trevvos_forge.exceptions import ForgeError
+"""from trevvos_forge.exceptions import FileNotFoundError
+from trevvos_forge.exceptions import NotADirectoryError"""
 from trevvos_forge.providers.ollama import OllamaProvider
 from trevvos_forge.settings import ForgeSettings
 
-from trevvos_forge.workspace import scan_workspace
+from trevvos_forge.workspace import scan_workspace, format_workspace_context
 
 app = typer.Typer(
     name = "trevvos",
@@ -277,8 +279,45 @@ def scan(path: Annotated[
         console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
         raise typer.Exit(code=1)
 
+@app.command()
+def plan(
+    instruction: str,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace path to analyze.")
+    ] = Path("."),
+    max_files: Annotated[
+        int,
+        typer.Option("--max-files", help="Maximum number of files to include in context.")
+    ] = 120
+) -> None:
+    """
+    Create a technical change plan using the current project structure.
+    """
+    try:
+        engine = build_engine()
 
+        with console.status("[bold]Scanning workspace...[/bold]", spinner="dots"):
+            scan_result = scan_workspace(path, max_files=max_files)
+            workspace_context = format_workspace_context(
+                scan=scan_result,
+                max_files=max_files,
+            )
 
+        with console.status("[bold]Planning change with your local LLM...[/bold]", spinner="dots"):
+            result = engine.plan_change(
+                instruction=instruction,
+                workspace_context=workspace_context,
+            )
+
+        console.print(result)
+
+    except (FileNotFoundError, NotADirectoryError) as exc:
+            console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+            raise typer.Exit(code=1)
+    except ForgeError as exc:
+            console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+            raise typer.Exit(code=1)
 
 @models_app.command("list")
 def list_models() -> None:
@@ -341,6 +380,7 @@ def pull_model(model: str) -> None:
     except ForgeError as exc:
         console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
         raise typer.Exit(code=1)
+
 
 
 def main() -> None:

@@ -1,7 +1,11 @@
 from dataclasses import dataclass
 
 from trevvos_forge.providers.base import LLMProvider
-from trevvos_forge.prompts import build_ask_prompt, build_code_generation_prompt
+from trevvos_forge.prompts import (
+    build_ask_prompt,
+    build_code_generation_prompt,
+    build_project_plan_prompt
+)
 
 @dataclass
 class TrevvosForgeEngine:
@@ -16,6 +20,14 @@ class TrevvosForgeEngine:
         prompt = build_code_generation_prompt(
             instruction=instruction,
             language=language
+        )
+
+        return self.provider.generate(prompt)
+
+    def plan_change(self, instruction: str, workspace_context: str) -> str:
+        prompt = build_project_plan_prompt(
+            instruction=instruction,
+            workspace_context=workspace_context
         )
 
         return self.provider.generate(prompt)

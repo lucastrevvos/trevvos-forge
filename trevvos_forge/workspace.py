@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from trevvos_forge.exceptions import WorkspaceError
+
 IGNORED_DIRS = {
     ".git",
     ".venv",
@@ -34,6 +36,15 @@ IMPORTANT_FILES = {
     "appsettings.json",
     "pom.xml",
     "build.gradle",
+}
+
+SENSITIVE_FILES = {
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.development",
+    "id_rsa",
+    "id_ed25519",
 }
 
 @dataclass(frozen=True)
@@ -189,3 +200,46 @@ Directories:
 Files:
 {files}
 """.strip()
+
+def read_workspace_file(root: Path, file_path: Path, max_chars: int = 12_000) -> str:
+    resolved_root = root.resolve()
+    resolved_file = (resolved_root / file_path).resolve()
+
+    _ensure_inside_root(
+        root=resolved_root,
+        path=resolved_file
+    )
+
+    relative_path = resolved_file.relative_to(resolved_root)
+
+    if _should_ignore(relative_path):
+        raise WorkspaceError(f"Path is ignored by Trevvos Forge: {relative_path}")
+
+    if resolved_file.name in SENSITIVE_FILES:
+        raise WorkspaceError(f"Refusing to read sensitive file: {relative_path}")
+
+    if not resolved_file.exists():
+        raise WorkspaceError(f"File does not exist: {relative_path}")
+
+    if not resolved_file.is_file():
+        raise WorkspaceError(f"Path is not a file: {relative_path}")
+
+    try:
+        content = resolved_file.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise WorkspaceError(f"File is not valid UTF-8 text: {relative_path}") from exc
+
+    except PermissionError as exc:
+        raise WorkspaceError(f"Permission denied while reading file: {relative_path}") from exc
+
+    if len(content) > max_chars:
+        return content[:max_chars] + "\n\n[... truncated by Trevvos Forge ...]"
+
+    return content
+
+def _ensure_inside_root(root: Path, path: Path) -> None:
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise WorkspaceError(f"Path is outside the workspace root: {path}") from exc
+

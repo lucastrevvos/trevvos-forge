@@ -8,12 +8,13 @@ from rich.table import Table
 
 from trevvos_forge.engine import TrevvosForgeEngine
 from trevvos_forge.exceptions import ForgeError
-"""from trevvos_forge.exceptions import FileNotFoundError
-from trevvos_forge.exceptions import NotADirectoryError"""
 from trevvos_forge.providers.ollama import OllamaProvider
 from trevvos_forge.settings import ForgeSettings
 
-from trevvos_forge.workspace import scan_workspace, format_workspace_context
+from trevvos_forge.workspace import scan_workspace, format_workspace_context, read_workspace_file
+
+def print_error(message: str) -> None:
+    err_console.print(f"[red][trevvos-forge][/red] {message}")
 
 app = typer.Typer(
     name = "trevvos",
@@ -30,6 +31,7 @@ models_app = typer.Typer(
 app.add_typer(models_app, name="models")
 
 console = Console()
+err_console = Console(stderr=True)
 
 @app.callback()
 def callback() -> None:
@@ -69,7 +71,7 @@ def ask(question: str) -> None:
         console.print(answer)
 
     except ForgeError as exc:
-        console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+        print_error(str(exc))
         raise typer.Exit(code=1)
 
 @app.command()
@@ -95,7 +97,7 @@ def generate(
         console.print(result)
 
     except ForgeError as exc:
-        console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+        print_error(str(exc))
         raise typer.Exit(code=1)
 
 @app.command()
@@ -139,7 +141,7 @@ def doctor() -> None:
             raise typer.Exit(code=1)
 
     except ForgeError as exc:
-        console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+        print_error(str(exc))
         raise typer.Exit(code=1)
 
 @app.command()
@@ -214,7 +216,7 @@ def setup(
             console.print(f'  TREVVOS_FORGE_MODEL="{model}" trevvos ask "hello"')
 
     except ForgeError as exc:
-        console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+        print_error(str(exc))
         console.print("\nIf Ollama is not running, start it and try again:")
         console.print("  ollama serve")
         raise typer.Exit(code=1)
@@ -276,7 +278,40 @@ def scan(path: Annotated[
             )
 
     except (FileNotFoundError, NotADirectoryError) as exc:
-        console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+@app.command()
+def inspect(
+    file_path: Annotated[
+        Path,
+        typer.Argument(help="File path inside the workspace to inspect.")
+    ],
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path.")
+    ] = Path("."),
+    max_chars: Annotated[
+        int,
+        typer.Option("--max-chars", help="Maximum number of characters to read.")
+    ] = 12_000
+
+) -> None:
+    """
+    Safely inspect a file inside the workspace
+    """
+    try:
+        content = read_workspace_file(
+            root=path,
+            file_path=file_path,
+            max_chars=max_chars
+        )
+
+        console.print(f"[bold]File:[/bold] {file_path}\n")
+        console.print(content)
+
+    except ForgeError as exc:
+        print_error(str(exc))
         raise typer.Exit(code=1)
 
 @app.command()
@@ -313,10 +348,10 @@ def plan(
         console.print(result)
 
     except (FileNotFoundError, NotADirectoryError) as exc:
-            console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+            print_error(str(exc))
             raise typer.Exit(code=1)
     except ForgeError as exc:
-            console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+            print_error(str(exc))
             raise typer.Exit(code=1)
 
 @models_app.command("list")
@@ -348,7 +383,7 @@ def list_models() -> None:
         )
 
     except ForgeError as exc:
-        console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+        print_error(str(exc))
         raise typer.Exit(code=1)
 
 @models_app.command("pull")
@@ -378,7 +413,7 @@ def pull_model(model: str) -> None:
             )
 
     except ForgeError as exc:
-        console.print(f"[red][trevvos-forge][/red] {exc}", stderr=True)
+        print_error(str(exc))
         raise typer.Exit(code=1)
 
 

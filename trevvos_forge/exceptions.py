@@ -24,3 +24,7 @@ class ProviderHttpError(ProviderError):
 
 class ConfigurationError(ForgeError):
     """Raised when Trevvos Forge configuration is invalid."""
+
+
+class WorkspaceError(ForgeError):
+    """Raised when workspace access or validation fails."""

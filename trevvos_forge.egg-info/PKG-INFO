@@ -82,3 +82,11 @@ trevvos scan
 
 trevvos scan ./my-project --max-files 100
 ```
+
+Plan a project change:
+
+```bash
+trevvos plan "add JWT authentication to this project"
+
+trevvos plan "improve this project structure" --path ./my-project
+```

@@ -2,6 +2,7 @@ README.md
 pyproject.toml
 trevvos_forge/__init__.py
 trevvos_forge/cli.py
+trevvos_forge/context_builder.py
 trevvos_forge/engine.py
 trevvos_forge/exceptions.py
 trevvos_forge/ollama_client.py

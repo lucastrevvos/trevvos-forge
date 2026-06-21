@@ -5,6 +5,8 @@ from rich.console import Console
 from pathlib import Path
 from rich.table import Table
 
+from trevvos_forge.context_builder import build_context
+
 from trevvos_forge.prompt_catalog import get_prompt, list_prompts
 from trevvos_forge.engine import TrevvosForgeEngine
 from trevvos_forge.exceptions import ForgeError
@@ -17,6 +19,7 @@ from trevvos_forge.sessions import (
     get_current_session,
     list_sessions,
     read_session_text,
+    write_session_text,
 )
 
 from trevvos_forge.workspace import scan_workspace, format_workspace_context, read_workspace_file
@@ -336,6 +339,79 @@ def inspect(
         print_error(str(exc))
         raise typer.Exit(code=1)
 
+
+@app.command()
+def context(
+    instruction: str,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+    max_files: Annotated[
+        int,
+        typer.Option("--max-files", help="Maximum number of files to include."),
+    ] = 8,
+    max_chars: Annotated[
+        int,
+        typer.Option("--max-chars", help="Maximum total characters in context."),
+    ] = 30_000,
+) -> None:
+    """
+    Build and save automatic project context for a request.
+    """
+    try:
+        session = create_session(
+            root=path,
+            user_request=instruction,
+            command="context",
+        )
+
+        with console.status("[bold]Building project context...[/bold]", spinner="dots"):
+            built_context = build_context(
+                root=path,
+                instruction=instruction,
+                max_files=max_files,
+                max_total_chars=max_chars,
+            )
+
+        write_session_text(
+            session=session,
+            file_name="context.md",
+            content=built_context.to_markdown(),
+        )
+
+        write_session_text(
+            session=session,
+            file_name="selected_files.json",
+            content=built_context.selected_files_json(),
+        )
+
+        console.print("[green]Context created.[/green]\n")
+        console.print(f"Session:       [bold]{session.metadata.id}[/bold]")
+        console.print(f"Selected files: {len(built_context.selected_files)}")
+        console.print(f"Context chars:  {built_context.total_chars}")
+
+        if built_context.selected_files:
+            console.print("\n[bold]Selected files[/bold]")
+            for selected_file in built_context.selected_files:
+                console.print(
+                    f"  - {selected_file.path} "
+                    f"[dim](score={selected_file.score}; {selected_file.reason})[/dim]"
+                )
+
+        console.print("\n[bold]Saved files[/bold]")
+        console.print(f"  - {session.path / 'context.md'}")
+        console.print(f"  - {session.path / 'selected_files.json'}")
+
+        console.print("\n[bold]Next[/bold]")
+        console.print("  trevvos sessions show")
+        console.print("  trevvos plan \"...\"")
+
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def plan(
     instruction: str,
@@ -571,6 +647,17 @@ def show_session(
         console.print(f"Path:      {session.path}")
 
         user_request = read_session_text(session, "user_request.txt")
+
+        selected_files_path = session.path / "selected_files.json"
+        context_path = session.path / "context.md"
+
+        if selected_files_path.exists():
+            console.print("\n[bold]Selected files[/bold]")
+            console.print(read_session_text(session, "selected_files.json"))
+
+        if context_path.exists():
+            console.print("\n[bold]Context[/bold]")
+            console.print(f"Saved at: {context_path}")
 
         console.print("\n[bold]User request[/bold]")
         console.print(user_request)

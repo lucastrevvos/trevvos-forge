@@ -56,3 +56,7 @@ class DiffValidationError(DiffError):
 
 class ApplyError(ForgeError):
     """Raised when applying a validated diff fails."""
+
+
+class TestRunError(ForgeError):
+    """Raised when configured validation commands cannot be run."""

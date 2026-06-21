@@ -17,6 +17,7 @@ from trevvos_forge.exceptions import (
     DiffValidationError,
     FileChangeOutputError,
     ForgeError,
+    TestRunError,
 )
 from trevvos_forge.file_change_outputs import parse_file_changes_output
 from trevvos_forge.prompt_catalog import get_prompt, list_prompts
@@ -39,6 +40,11 @@ from trevvos_forge.sessions import (
 )
 from trevvos_forge.settings import ForgeSettings
 from trevvos_forge.structured_outputs import parse_plan_output
+from trevvos_forge.test_runner import (
+    load_test_commands,
+    run_test_commands,
+    write_test_artifacts,
+)
 from trevvos_forge.workspace import read_workspace_file, scan_workspace
 
 
@@ -1062,6 +1068,124 @@ def apply(
         raise typer.Exit(code=1)
 
 
+@app.command()
+def test(
+    session_id: Annotated[
+        str | None,
+        typer.Option("--session", "-s", help="Session ID to use. Defaults to current session."),
+    ] = None,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Run without interactive confirmation."),
+    ] = False,
+    timeout: Annotated[
+        int,
+        typer.Option("--timeout", help="Timeout per command in seconds."),
+    ] = 120,
+) -> None:
+    """
+    Run configured validation commands against the current workspace state.
+    """
+    session = None
+
+    try:
+        workspace_root = path.resolve()
+
+        if session_id:
+            session = get_session(root=workspace_root, session_id=session_id)
+        else:
+            session = get_current_session(workspace_root)
+
+        patch_path = session.path / "diff.patch"
+
+        if not patch_path.exists():
+            raise TestRunError("Cannot test: diff.patch not found in session. Run trevvos diff first.")
+
+        commands = load_test_commands(workspace_root)
+
+        if not commands:
+            result = run_test_commands(
+                commands=[],
+                repo_root=workspace_root,
+                timeout_seconds=timeout,
+            )
+            write_test_artifacts(session.path, result)
+
+            console.print("[yellow]No test commands configured or detected.[/yellow]\n")
+            console.print("Configure .trevvos/config.json, for example:")
+            console.print(
+                '{\n'
+                '  "test_commands": [\n'
+                '    "python -m unittest discover -s tests",\n'
+                '    "python -m compileall trevvos_forge tests"\n'
+                "  ]\n"
+                "}"
+            )
+            console.print("\n[bold]Artifacts[/bold]")
+            console.print(f"  - test_results.json: {session.path / 'test_results.json'}")
+            console.print(f"  - test_output.log: {session.path / 'test_output.log'}")
+            raise typer.Exit(code=1)
+
+        console.print("[bold]Test commands[/bold]\n")
+
+        for index, command in enumerate(commands, start=1):
+            console.print(f"{index}. {command}")
+
+        if session.metadata.status != "applied":
+            console.print(
+                "\n[yellow]Patch is not marked as applied. "
+                "Tests will run against the current working tree.[/yellow]"
+            )
+
+        if not yes and not typer.confirm("\nRun these commands?", default=False):
+            console.print("[yellow]Cancelled.[/yellow]")
+            return
+
+        console.print("\n[bold]Running tests...[/bold]\n")
+
+        result = run_test_commands(
+            commands=commands,
+            repo_root=workspace_root,
+            timeout_seconds=timeout,
+        )
+
+        write_test_artifacts(session.path, result)
+
+        for command_result in result.commands:
+            marker = "[green]OK[/green]" if command_result.status == "passed" else "[red]FAIL[/red]"
+            console.print(f"{marker} {command_result.command}")
+
+            if command_result.status != "passed":
+                if command_result.exit_code is not None:
+                    console.print(f"Exit code: {command_result.exit_code}")
+                else:
+                    console.print("Exit code: timeout")
+
+        console.print(f"\n[bold]Test status:[/bold] {result.status}")
+
+        console.print("\n[bold]Artifacts[/bold]")
+        console.print(f"  - test_results.json: {session.path / 'test_results.json'}")
+        console.print(f"  - test_output.log: {session.path / 'test_output.log'}")
+
+        if result.status != "passed":
+            raise typer.Exit(code=1)
+
+    except ForgeError as exc:
+        if session is not None:
+            write_session_text(
+                session=session,
+                file_name="test_error.txt",
+                content=str(exc),
+            )
+
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
 @models_app.command("list")
 def list_models() -> None:
     """
@@ -1281,6 +1405,9 @@ def show_session(
         semantic_review_path = session.path / "semantic_review.json"
         apply_result_path = session.path / "apply_result.json"
         apply_error_path = session.path / "apply_error.txt"
+        test_results_path = session.path / "test_results.json"
+        test_output_path = session.path / "test_output.log"
+        test_error_path = session.path / "test_error.txt"
 
         if prompt_metadata_path.exists():
             console.print("\n[bold]Prompt metadata[/bold]")
@@ -1377,6 +1504,18 @@ def show_session(
         if apply_error_path.exists():
             console.print("\n[bold]Apply error[/bold]")
             console.print(read_session_text(session, "apply_error.txt"))
+
+        if test_results_path.exists():
+            console.print("\n[bold]Test results[/bold]")
+            console.print(f"Saved at: {test_results_path}")
+
+        if test_output_path.exists():
+            console.print("\n[bold]Test output[/bold]")
+            console.print(f"Saved at: {test_output_path}")
+
+        if test_error_path.exists():
+            console.print("\n[bold]Test error[/bold]")
+            console.print(read_session_text(session, "test_error.txt"))
 
         console.print("\n[bold]User request[/bold]")
         console.print(user_request)

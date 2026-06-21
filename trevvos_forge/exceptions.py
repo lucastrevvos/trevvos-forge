@@ -60,3 +60,7 @@ class ApplyError(ForgeError):
 
 class TestRunError(ForgeError):
     """Raised when configured validation commands cannot be run."""
+
+
+class CommitError(ForgeError):
+    """Raised when assisted commit planning or execution fails."""

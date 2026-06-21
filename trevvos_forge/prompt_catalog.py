@@ -386,6 +386,42 @@ Evidence:
 {review_context}
 """,
     ),
+    "commit_message_generation": PromptTemplate(
+        name="commit_message_generation",
+        version="1.0.0",
+        description="Generates a concise commit message from Trevvos Forge session artifacts.",
+        template="""
+You are Trevvos Forge, a local-first software engineering assistant.
+
+Generate a safe Git commit message using only the provided session evidence.
+
+Return ONLY valid JSON.
+Do not use Markdown.
+Do not use a code block.
+Do not write text before or after the JSON.
+
+Rules:
+- Do not invent scope, files, tests, or behavior.
+- Keep the subject short, imperative, and specific.
+- Prefer a conventional commit style only when it is clearly supported by the evidence.
+- Do not mention AI unless the change is about AI behavior or AI features.
+- The subject must be 72 characters or fewer.
+- Body items must be concise and based on evidence.
+
+Return this JSON shape:
+{{
+  "subject": "Add sandbox test mode",
+  "body": [
+    "Adds sandbox execution for trevvos test.",
+    "Captures patch apply metadata in test artifacts."
+  ],
+  "confidence": "medium"
+}}
+
+Evidence:
+{commit_context}
+""",
+    ),
 }
 
 

@@ -7,12 +7,23 @@ from rich.console import Console
 from rich.table import Table
 
 from trevvos_forge.apply_patch import apply_patch, check_patch
+from trevvos_forge.commit_workflow import (
+    CommitMessage,
+    CommitResult,
+    build_commit_plan,
+    build_deterministic_commit_message,
+    parse_commit_message_response,
+    render_commit_message,
+    run_git_commit,
+    write_commit_artifacts,
+)
 from trevvos_forge.context_builder import build_context
 from trevvos_forge.diff_builder import build_unified_diff_from_file_changes
 from trevvos_forge.diff_validation import validate_diff_patch
 from trevvos_forge.engine import TrevvosForgeEngine
 from trevvos_forge.exceptions import (
     ApplyError,
+    CommitError,
     DiffError,
     DiffValidationError,
     FileChangeOutputError,
@@ -47,6 +58,11 @@ from trevvos_forge.sessions import (
 )
 from trevvos_forge.settings import ForgeSettings
 from trevvos_forge.structured_outputs import parse_plan_output
+from trevvos_forge.status_workflow import (
+    build_session_status,
+    render_status_text,
+    write_session_status,
+)
 from trevvos_forge.test_runner import (
     load_test_commands,
     run_test_commands,
@@ -537,6 +553,53 @@ def context(
         console.print("\n[bold]Next[/bold]")
         console.print("  trevvos sessions show")
         console.print("  trevvos plan \"...\"")
+
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def status(
+    session_id: Annotated[
+        str | None,
+        typer.Option("--session", "-s", help="Session ID to use. Defaults to current session."),
+    ] = None,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print status as JSON."),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Show artifact paths and extra details."),
+    ] = False,
+) -> None:
+    """
+    Show an operational checklist for the current Forge session.
+    """
+    try:
+        workspace_root = path.resolve()
+
+        if session_id:
+            session = get_session(root=workspace_root, session_id=session_id)
+        else:
+            session = get_current_session(workspace_root)
+
+        session_status = build_session_status(
+            session_dir=session.path,
+            repo_root=workspace_root,
+        )
+        write_session_status(session.path, session_status)
+
+        if json_output:
+            console.print_json(json.dumps(session_status, ensure_ascii=False))
+            return
+
+        console.print(render_status_text(session_status, verbose=verbose))
 
     except ForgeError as exc:
         print_error(str(exc))
@@ -1407,6 +1470,202 @@ def _print_deterministic_review(session_path: Path, context: dict, reason: str |
         console.print("  - semantic_review.json: not available")
 
 
+@app.command()
+def commit(
+    session_id: Annotated[
+        str | None,
+        typer.Option("--session", "-s", help="Session ID to use. Defaults to current session."),
+    ] = None,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+    message: Annotated[
+        str | None,
+        typer.Option("--message", "-m", help="Commit message to use."),
+    ] = None,
+    no_llm: Annotated[
+        bool,
+        typer.Option("--no-llm", help="Generate commit message deterministically."),
+    ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Commit without interactive confirmation."),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Create commit artifacts without staging or committing."),
+    ] = False,
+    provider_name: Annotated[
+        str,
+        typer.Option("--provider", help="LLM provider to use for commit message generation."),
+    ] = "ollama",
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="Model override for commit message generation."),
+    ] = None,
+) -> None:
+    """
+    Create a Git commit from files related to the current Trevvos Forge session.
+    """
+    try:
+        workspace_root = path.resolve()
+
+        if session_id:
+            session = get_session(root=workspace_root, session_id=session_id)
+        else:
+            session = get_current_session(workspace_root)
+
+        manual_message = _manual_commit_message(message) if message else None
+
+        if manual_message is not None:
+            commit_message = manual_message
+            mode = "manual"
+        elif no_llm:
+            commit_message = None
+            mode = "deterministic"
+        else:
+            commit_message = _try_generate_llm_commit_message(
+                session_path=session.path,
+                workspace_root=workspace_root,
+                provider_name=provider_name,
+                model=model,
+            )
+            mode = "llm" if commit_message is not None else "deterministic"
+
+        plan = build_commit_plan(
+            session_dir=session.path,
+            repo_root=workspace_root,
+            message=commit_message,
+            mode=mode,
+        )
+
+        write_commit_artifacts(session_dir=session.path, plan=plan)
+        _print_commit_plan(plan)
+
+        if dry_run:
+            result = CommitResult(
+                status="dry_run",
+                files_staged=plan.files_to_stage,
+                message_subject=plan.message.subject,
+            )
+            write_commit_artifacts(session_dir=session.path, plan=plan, result=result)
+            console.print("\n[yellow]Dry run only. No files were staged and no commit was created.[/yellow]")
+            _print_commit_artifacts(session.path)
+            return
+
+        if not yes and not typer.confirm("Proceed with commit?", default=False):
+            result = CommitResult(status="cancelled")
+            write_commit_artifacts(session_dir=session.path, plan=plan, result=result)
+            console.print("[yellow]Cancelled.[/yellow]")
+            return
+
+        result = run_git_commit(
+            repo_root=workspace_root,
+            files=plan.files_to_stage,
+            message_text=render_commit_message(plan.message),
+        )
+        write_commit_artifacts(session_dir=session.path, plan=plan, result=result)
+
+        if result.status != "committed":
+            print_error(result.error or "git commit failed")
+            raise typer.Exit(code=1)
+
+        console.print(f"\n[green]Commit created:[/green] {result.commit_hash}")
+        _print_commit_artifacts(session.path)
+
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
+def _try_generate_llm_commit_message(
+    *,
+    session_path: Path,
+    workspace_root: Path,
+    provider_name: str,
+    model: str | None,
+) -> CommitMessage | None:
+    if provider_name != "ollama":
+        return None
+
+    deterministic_message = build_deterministic_commit_message(session_path, [])
+    context = build_review_context(session_path)
+    context["deterministic_subject"] = deterministic_message.subject
+
+    try:
+        settings = load_settings()
+        provider = OllamaProvider(
+            model=model or settings.model,
+            base_url=settings.base_url,
+            timeout=settings.timeout,
+        )
+        prompt = get_prompt("commit_message_generation").render(
+            commit_context=json.dumps(context, indent=2, ensure_ascii=False),
+        )
+
+        with console.status("[bold]Generating commit message with local LLM...[/bold]", spinner="dots"):
+            raw_response = provider.generate(prompt)
+
+        try:
+            commit_message = parse_commit_message_response(raw_response)
+        except CommitError:
+            (session_path / "commit_message_raw.txt").write_text(raw_response, encoding="utf-8")
+            return None
+
+        return commit_message
+    except ForgeError:
+        return None
+
+
+def _manual_commit_message(raw_message: str) -> CommitMessage:
+    lines = raw_message.replace("\r\n", "\n").replace("\r", "\n").splitlines()
+    subject = lines[0].strip() if lines else raw_message.strip()
+    body = [line.strip() for line in lines[1:] if line.strip()]
+
+    return CommitMessage(subject=subject, body=body, confidence="manual")
+
+
+def _print_commit_plan(plan) -> None:
+    console.print(f"[bold]Commit plan for session:[/bold] {plan.session_id}\n")
+
+    console.print("[bold]Files to stage[/bold]")
+    for file_path in plan.files_to_stage:
+        console.print(f"  - {file_path}")
+
+    console.print("\n[bold]Unrelated changes[/bold]")
+    if plan.unrelated_changes:
+        for file_path in plan.unrelated_changes:
+            console.print(f"  - [yellow]{file_path}[/yellow]")
+        console.print("[yellow]These will NOT be staged.[/yellow]")
+    else:
+        console.print("  - None")
+
+    console.print("\n[bold]Validation evidence[/bold]")
+    console.print(f"  - Test status: {plan.test_status or 'not available'}")
+    console.print(
+        "  - LLM review: "
+        f"{plan.review_verdict or 'not available'}"
+        + (f" / {plan.review_risk_level} risk" if plan.review_risk_level else "")
+    )
+
+    if plan.test_status and plan.test_status != "passed":
+        console.print(f"[yellow]Warning: latest test status is {plan.test_status}.[/yellow]")
+
+    if plan.review_verdict in {"has_concerns", "blocked"}:
+        console.print(f"[yellow]Warning: latest review verdict is {plan.review_verdict}.[/yellow]")
+
+    console.print("\n[bold]Commit message[/bold]\n")
+    console.print(render_commit_message(plan.message).rstrip("\n"))
+
+
+def _print_commit_artifacts(session_path: Path) -> None:
+    console.print("\n[bold]Artifacts[/bold]")
+    console.print(f"  - commit_message.txt: {session_path / 'commit_message.txt'}")
+    console.print(f"  - commit_plan.json: {session_path / 'commit_plan.json'}")
+    console.print(f"  - commit_result.json: {session_path / 'commit_result.json'}")
+
+
 @models_app.command("list")
 def list_models() -> None:
     """
@@ -1632,6 +1891,11 @@ def show_session(
         llm_review_path = session.path / "llm_review.md"
         llm_review_json_path = session.path / "llm_review.json"
         llm_review_raw_path = session.path / "llm_review_raw.txt"
+        commit_message_path = session.path / "commit_message.txt"
+        commit_plan_path = session.path / "commit_plan.json"
+        commit_result_path = session.path / "commit_result.json"
+        commit_message_raw_path = session.path / "commit_message_raw.txt"
+        session_status_path = session.path / "session_status.json"
 
         if prompt_metadata_path.exists():
             console.print("\n[bold]Prompt metadata[/bold]")
@@ -1752,6 +2016,26 @@ def show_session(
         if llm_review_raw_path.exists():
             console.print("\n[bold]Raw LLM review[/bold]")
             console.print(f"Saved at: {llm_review_raw_path}")
+
+        if commit_message_path.exists():
+            console.print("\n[bold]Commit message[/bold]")
+            console.print(f"Saved at: {commit_message_path}")
+
+        if commit_plan_path.exists():
+            console.print("\n[bold]Commit plan[/bold]")
+            console.print(f"Saved at: {commit_plan_path}")
+
+        if commit_result_path.exists():
+            console.print("\n[bold]Commit result[/bold]")
+            console.print(f"Saved at: {commit_result_path}")
+
+        if commit_message_raw_path.exists():
+            console.print("\n[bold]Raw commit message response[/bold]")
+            console.print(f"Saved at: {commit_message_raw_path}")
+
+        if session_status_path.exists():
+            console.print("\n[bold]Session status[/bold]")
+            console.print(f"Saved at: {session_status_path}")
 
         console.print("\n[bold]User request[/bold]")
         console.print(user_request)

@@ -30,6 +30,16 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("Consider warnings", prompt)
         self.assertIn("Return ONLY valid JSON", prompt)
 
+    def test_commit_message_prompt_contains_safety_rules(self) -> None:
+        prompt = get_prompt("commit_message_generation").render(
+            commit_context="{}",
+        )
+
+        self.assertIn("Return ONLY valid JSON", prompt)
+        self.assertIn("Do not invent scope", prompt)
+        self.assertIn("subject", prompt)
+        self.assertIn("72 characters", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,7 +3,7 @@ from pathlib import Path, PurePosixPath
 
 from trevvos_forge.exceptions import DiffError
 from trevvos_forge.file_change_outputs import FileChange, FileChangesOutput
-from trevvos_forge.operation_applier import apply_operation_change
+from trevvos_forge.operation_applier import apply_operation_change_to_content
 
 
 def build_unified_diff_from_file_changes(
@@ -14,13 +14,17 @@ def build_unified_diff_from_file_changes(
 ) -> str:
     resolved_root = workspace_root.resolve()
     patch_parts: list[str] = []
+    changes_by_path: dict[str, list[FileChange]] = {}
 
     for change in file_changes.changes:
         relative_path = _normalize_change_path(change.path)
+        changes_by_path.setdefault(relative_path, []).append(change)
+
+    for relative_path, changes in changes_by_path.items():
         file_patch = _build_file_diff(
             workspace_root=resolved_root,
             relative_path=relative_path,
-            change=change,
+            changes=changes,
             warnings=warnings,
         )
 
@@ -37,9 +41,12 @@ def _build_file_diff(
     *,
     workspace_root: Path,
     relative_path: str,
-    change: FileChange,
+    changes: list[FileChange],
     warnings: list[str] | None,
 ) -> str:
+    if not changes:
+        return ""
+
     target_path = (workspace_root / relative_path).resolve()
 
     try:
@@ -47,23 +54,35 @@ def _build_file_diff(
     except ValueError as exc:
         raise DiffError(f"Refusing to build diff for path outside workspace: {relative_path}") from exc
 
+    modes = {change.mode for change in changes}
+
+    if len(modes) > 1:
+        raise DiffError(f"Cannot compose mixed file change modes for: {relative_path}")
+
+    change = changes[0]
+
     if change.mode == "operation_based_edit":
-        operation_result = apply_operation_change(change, workspace_root)
+        original_content, final_content = _compose_operation_changes(
+            target_path=target_path,
+            relative_path=relative_path,
+            changes=changes,
+            warnings=warnings,
+        )
 
-        if operation_result.warnings and warnings is not None:
-            warnings.extend(operation_result.warnings)
-
-        if operation_result.original_content is None:
+        if original_content is None:
             old_lines = []
             fromfile = "/dev/null"
+            change_type = "created"
         else:
-            old_lines = _content_to_lines(operation_result.original_content)
+            old_lines = _content_to_lines(original_content)
             fromfile = f"a/{relative_path}"
+            change_type = "modified"
 
-        new_lines = _content_to_lines(operation_result.new_content)
-        change_type = "created" if operation_result.original_content is None else "modified"
+        new_lines = _content_to_lines(final_content)
     elif change.mode != "full_file_rewrite":
         raise DiffError(f"Unsupported file change mode: {change.mode}")
+    elif len(changes) > 1:
+        raise DiffError(f"Cannot compose multiple full file rewrites for: {relative_path}")
     elif change.content is None:
         raise DiffError(f"Missing full file content for: {relative_path}")
     elif change.change_type == "modified":
@@ -121,6 +140,59 @@ def _build_file_diff(
         header_lines.append("new file mode 100644")
 
     return "\n".join(header_lines) + "\n" + "".join(diff_lines).rstrip("\n")
+
+
+def _compose_operation_changes(
+    *,
+    target_path: Path,
+    relative_path: str,
+    changes: list[FileChange],
+    warnings: list[str] | None,
+) -> tuple[str | None, str]:
+    first_change = changes[0]
+
+    if first_change.operation == "create_file":
+        if target_path.exists():
+            raise DiffError(f"Cannot create file because it already exists: {relative_path}")
+
+        original_content: str | None = None
+        current_content: str | None = None
+    else:
+        if not target_path.exists():
+            raise DiffError(f"Cannot apply operation to missing file: {relative_path}")
+
+        if not target_path.is_file():
+            raise DiffError(f"Cannot apply operation to non-file path: {relative_path}")
+
+        try:
+            original_content = target_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise DiffError(f"Cannot apply operation to non-UTF-8 file: {relative_path}") from exc
+        except PermissionError as exc:
+            raise DiffError(f"Permission denied while reading file: {relative_path}") from exc
+
+        current_content = original_content
+
+    for index, change in enumerate(changes):
+        if index > 0 and change.operation == "create_file":
+            raise DiffError(f"create_file must be the first operation for: {relative_path}")
+
+        operation_result = apply_operation_change_to_content(
+            change=change,
+            original_content=original_content,
+            current_content=current_content,
+            path=relative_path,
+        )
+
+        if operation_result.warnings and warnings is not None:
+            warnings.extend(operation_result.warnings)
+
+        current_content = operation_result.new_content
+
+    if current_content is None:
+        raise DiffError(f"No content was generated for: {relative_path}")
+
+    return original_content, current_content
 
 
 def _content_to_lines(content: str) -> list[str]:

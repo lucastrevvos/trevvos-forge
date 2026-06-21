@@ -40,58 +40,92 @@ def apply_operation_change(change: FileChange, repo_root: Path) -> OperationAppl
     except PermissionError as exc:
         raise DiffError(f"Permission denied while reading file: {change.path}") from exc
 
+    return apply_operation_change_to_content(
+        change=change,
+        original_content=original_content,
+        current_content=original_content,
+        path=change.path,
+    )
+
+
+def apply_operation_change_to_content(
+    *,
+    change: FileChange,
+    original_content: str | None,
+    current_content: str | None,
+    path: str | None = None,
+) -> OperationApplyResult:
+    if change.mode != "operation_based_edit":
+        raise DiffError(f"Unsupported operation mode: {change.mode}")
+
+    display_path = path or change.path
+
+    if change.operation == "create_file":
+        if original_content is not None or current_content is not None:
+            raise DiffError(f"Cannot create file after existing content was loaded: {display_path}")
+
+        return OperationApplyResult(
+            path=display_path,
+            original_content=None,
+            new_content=_ensure_final_newline(_required_value(change.content, "content")),
+            warnings=[],
+        )
+
+    if current_content is None:
+        raise DiffError(f"Cannot apply operation to missing file: {display_path}")
+
     if change.operation == "insert_after_heading":
         new_content = _insert_after_unique_line(
-            content=original_content,
+            content=current_content,
             target=_required_value(change.target, "target"),
             insert=_required_value(change.insert, "insert"),
-            path=change.path,
+            path=display_path,
             operation="insert_after_heading",
             markdown_spacing=True,
         )
     elif change.operation == "insert_after_line":
         new_content = _insert_after_unique_line(
-            content=original_content,
+            content=current_content,
             target=_required_value(change.target, "target"),
             insert=_required_value(change.insert, "insert"),
-            path=change.path,
+            path=display_path,
             operation="insert_after_line",
             markdown_spacing=False,
         )
     elif change.operation == "insert_before_line":
         new_content = _insert_before_unique_line(
-            content=original_content,
+            content=current_content,
             target=_required_value(change.target, "target"),
             insert=_required_value(change.insert, "insert"),
-            path=change.path,
+            path=display_path,
             operation="insert_before_line",
         )
     elif change.operation == "replace_exact_text":
         new_content = _replace_exact_text(
-            content=original_content,
+            content=current_content,
             target=_required_value(change.target, "target"),
             replacement=_required_value(change.replacement, "replacement"),
-            path=change.path,
+            path=display_path,
             operation="replace_exact_text",
         )
     elif change.operation == "replace_block":
         new_content = _replace_exact_text(
-            content=original_content,
+            content=current_content,
             target=_required_value(change.target, "target"),
             replacement=_required_value(change.replacement, "replacement"),
-            path=change.path,
+            path=display_path,
             operation="replace_block",
         )
     elif change.operation == "append_to_file":
         new_content = _append_to_file(
-            content=original_content,
+            content=current_content,
             insert=_required_value(change.insert, "insert"),
         )
     else:
         raise DiffError(f"Unsupported operation: {change.operation}")
 
     return OperationApplyResult(
-        path=change.path,
+        path=display_path,
         original_content=original_content,
         new_content=new_content,
         warnings=[],

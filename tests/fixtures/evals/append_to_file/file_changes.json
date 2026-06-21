@@ -1,0 +1,11 @@
+{
+  "changes": [
+    {
+      "path": "README.md",
+      "change_type": "modified",
+      "mode": "operation_based_edit",
+      "operation": "append_to_file",
+      "insert": "\n\n## License\n\nMIT\n"
+    }
+  ]
+}

@@ -15,6 +15,9 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("Nao concatene o texto novo em um paragrafo existente", prompt)
         self.assertIn("abaixo do titulo principal", prompt)
         self.assertIn("Nao copie numeros de linha", prompt)
+        self.assertIn("insert_before_line", prompt)
+        self.assertIn("replace_block", prompt)
+        self.assertIn("append_to_file", prompt)
 
 
 if __name__ == "__main__":

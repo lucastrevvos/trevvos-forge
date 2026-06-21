@@ -1,0 +1,12 @@
+{
+  "changes": [
+    {
+      "path": "example.py",
+      "change_type": "modified",
+      "mode": "operation_based_edit",
+      "operation": "replace_block",
+      "target": "def duplicated():\n    return \"same\"\n",
+      "replacement": "def duplicated():\n    return \"new\"\n"
+    }
+  ]
+}

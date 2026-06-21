@@ -92,7 +92,11 @@ class GoldenEvalTests(unittest.TestCase):
         )
 
     def _assert_expected_files(self, workspace_root: Path, expected_dir: Path) -> None:
-        expected_files = sorted(path for path in expected_dir.rglob("*") if path.is_file())
+        expected_files = sorted(
+            path
+            for path in expected_dir.rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+        )
 
         self.assertGreater(len(expected_files), 0, "Expected directory has no files.")
 

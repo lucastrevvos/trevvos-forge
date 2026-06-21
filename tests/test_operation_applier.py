@@ -57,6 +57,36 @@ class OperationApplierTests(unittest.TestCase):
 
             self.assertEqual(result.new_content, "alpha\nbeta\ninserted\ngamma\n")
 
+    def test_insert_before_line(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "README.md").write_text(
+                "# Trevvos Forge\n\n## Usage\n\nRun trevvos.\n",
+                encoding="utf-8",
+            )
+
+            result = apply_operation_change(
+                FileChange(
+                    path="README.md",
+                    change_type="modified",
+                    content=None,
+                    mode="operation_based_edit",
+                    operation="insert_before_line",
+                    target="## Usage",
+                    insert="## Installation\n\nRun `pip install trevvos-forge`.\n\n",
+                ),
+                root,
+            )
+
+            self.assertEqual(
+                result.new_content,
+                "# Trevvos Forge\n\n"
+                "## Installation\n\n"
+                "Run `pip install trevvos-forge`.\n\n"
+                "## Usage\n\n"
+                "Run trevvos.\n",
+            )
+
     def test_replace_exact_text(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -76,6 +106,53 @@ class OperationApplierTests(unittest.TestCase):
             )
 
             self.assertEqual(result.new_content, "hello new world\n")
+
+    def test_replace_block(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "example.py").write_text(
+                'def hello():\n    return "old"\n\n'
+                'def untouched():\n    return "same"\n',
+                encoding="utf-8",
+            )
+
+            result = apply_operation_change(
+                FileChange(
+                    path="example.py",
+                    change_type="modified",
+                    content=None,
+                    mode="operation_based_edit",
+                    operation="replace_block",
+                    target='def hello():\n    return "old"\n',
+                    replacement='def hello():\n    return "new"\n',
+                ),
+                root,
+            )
+
+            self.assertEqual(
+                result.new_content,
+                'def hello():\n    return "new"\n\n'
+                'def untouched():\n    return "same"\n',
+            )
+
+    def test_append_to_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "README.md").write_text("# Trevvos Forge\n", encoding="utf-8")
+
+            result = apply_operation_change(
+                FileChange(
+                    path="README.md",
+                    change_type="modified",
+                    content=None,
+                    mode="operation_based_edit",
+                    operation="append_to_file",
+                    insert="\n\n## License\n\nMIT\n",
+                ),
+                root,
+            )
+
+            self.assertEqual(result.new_content, "# Trevvos Forge\n\n## License\n\nMIT\n")
 
     def test_create_file_diff_passes_git_apply_check(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -140,6 +217,48 @@ class OperationApplierTests(unittest.TestCase):
                         operation="insert_after_line",
                         target="same",
                         insert="text",
+                    ),
+                    root,
+                )
+
+    def test_missing_insert_before_line_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "README.md").write_text("# Trevvos Forge\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(DiffError, "target not found"):
+                apply_operation_change(
+                    FileChange(
+                        path="README.md",
+                        change_type="modified",
+                        content=None,
+                        mode="operation_based_edit",
+                        operation="insert_before_line",
+                        target="## Usage",
+                        insert="text",
+                    ),
+                    root,
+                )
+
+    def test_ambiguous_replace_block_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "example.py").write_text(
+                'def duplicated():\n    return "same"\n\n'
+                'def duplicated():\n    return "same"\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(DiffError, "ambiguous"):
+                apply_operation_change(
+                    FileChange(
+                        path="example.py",
+                        change_type="modified",
+                        content=None,
+                        mode="operation_based_edit",
+                        operation="replace_block",
+                        target='def duplicated():\n    return "same"\n',
+                        replacement='def duplicated():\n    return "new"\n',
                     ),
                     root,
                 )

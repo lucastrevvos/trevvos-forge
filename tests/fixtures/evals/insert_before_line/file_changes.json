@@ -1,0 +1,12 @@
+{
+  "changes": [
+    {
+      "path": "README.md",
+      "change_type": "modified",
+      "mode": "operation_based_edit",
+      "operation": "insert_before_line",
+      "target": "## Usage",
+      "insert": "## Installation\n\nRun `pip install trevvos-forge`.\n\n"
+    }
+  ]
+}

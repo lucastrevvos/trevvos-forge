@@ -12,6 +12,10 @@ Each scenario contains:
 The evals do not call a real LLM. They test the parser, deterministic diff builder,
 and `git apply` behavior using repeatable local fixtures.
 
+Current scenarios cover deterministic inserts before and after lines/headings,
+exact text replacement, multi-line block replacement, append-to-file behavior,
+file creation, legacy full-file rewrites, missing targets, and ambiguous targets.
+
 Add a new scenario by creating a new directory under `tests/fixtures/evals/` with
 the same layout. Use `expected/` for success cases or `expected_error.txt` for
 expected failures.

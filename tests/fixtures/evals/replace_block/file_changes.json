@@ -1,0 +1,12 @@
+{
+  "changes": [
+    {
+      "path": "example.py",
+      "change_type": "modified",
+      "mode": "operation_based_edit",
+      "operation": "replace_block",
+      "target": "def hello():\n    return \"old\"\n",
+      "replacement": "def hello():\n    return \"new\"\n"
+    }
+  ]
+}

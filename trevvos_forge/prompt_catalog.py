@@ -198,7 +198,10 @@ Prefira "mode": "operation_based_edit" para alteracoes locais.
 Use "mode": "full_file_rewrite" somente quando uma operacao local nao for suficiente.
 Para Markdown, use "operation": "insert_after_heading" quando o pedido disser abaixo do titulo, depois da secao ou equivalente.
 Para insercao depois de uma linha exata, use "operation": "insert_after_line".
+Para insercao antes de uma linha exata, use "operation": "insert_before_line".
 Para substituicao textual simples, use "operation": "replace_exact_text".
+Para trocar uma funcao, secao, bloco de codigo ou trecho multi-linha, use "operation": "replace_block".
+Para acrescentar conteudo ao final de um arquivo existente, use "operation": "append_to_file".
 Para criacao de arquivo, use "operation": "create_file".
 Se o contexto indicar que um arquivo esta truncado, nao invente o restante do arquivo.
 Se nao houver contexto suficiente para fazer a edicao com seguranca, retorne:
@@ -219,6 +222,21 @@ Exemplo preferencial para edicao local:
   ]
 }}
 
+Exemplo para inserir antes de uma linha:
+
+{{
+  "changes": [
+    {{
+      "path": "README.md",
+      "change_type": "modified",
+      "mode": "operation_based_edit",
+      "operation": "insert_before_line",
+      "target": "## Usage",
+      "insert": "## Installation\\n\\nRun `pip install trevvos-forge`.\\n\\n"
+    }}
+  ]
+}}
+
 Exemplo para substituicao textual:
 
 {{
@@ -230,6 +248,35 @@ Exemplo para substituicao textual:
       "operation": "replace_exact_text",
       "target": "texto antigo",
       "replacement": "texto novo"
+    }}
+  ]
+}}
+
+Exemplo para substituir bloco multi-linha:
+
+{{
+  "changes": [
+    {{
+      "path": "trevvos_forge/example.py",
+      "change_type": "modified",
+      "mode": "operation_based_edit",
+      "operation": "replace_block",
+      "target": "def hello():\\n    return \\"old\\"\\n",
+      "replacement": "def hello():\\n    return \\"new\\"\\n"
+    }}
+  ]
+}}
+
+Exemplo para acrescentar ao final do arquivo:
+
+{{
+  "changes": [
+    {{
+      "path": "README.md",
+      "change_type": "modified",
+      "mode": "operation_based_edit",
+      "operation": "append_to_file",
+      "insert": "\\n## License\\n\\nMIT\\n"
     }}
   ]
 }}
@@ -268,12 +315,18 @@ Regras:
 - Para arquivos criados, "content" deve conter o conteudo completo do novo arquivo.
 - Para "insert_after_heading", informe "target" e "insert".
 - Para "insert_after_line", informe "target" e "insert".
+- Para "insert_before_line", informe "target" e "insert".
 - Para "replace_exact_text", informe "target" e "replacement".
+- Para "replace_block", informe "target" e "replacement"; preserve indentacao exatamente.
+- Para "append_to_file", informe "insert" e nao informe "target".
 - Para "create_file", informe "content".
 - Nao omita partes de arquivos modificados.
 - Nao use placeholders como "...".
 - Nao invente arquivos desnecessarios.
 - Quando o usuario pedir algo "abaixo", "depois", "antes" ou "em nova linha", nao concatene o texto novo em um paragrafo existente.
+- Quando o usuario pedir algo "antes de X", prefira "insert_before_line" com alvo exato.
+- Quando o usuario pedir para acrescentar no final, prefira "append_to_file".
+- Quando o usuario pedir para trocar uma funcao, secao ou bloco multi-linha, prefira "replace_block".
 - Para Markdown, "abaixo do titulo principal" significa inserir depois da linha do heading principal, normalmente separado por uma linha em branco.
 - Para Markdown, preserve headings, listas, links e blocos de codigo.
 - Para Markdown, nao junte uma tagline ou frase nova no mesmo paragrafo existente se a intencao for criar uma linha ou bloco abaixo de um heading.

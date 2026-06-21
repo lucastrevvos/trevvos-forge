@@ -155,6 +155,15 @@ def _validate_operation_fields(
         _require_operation_str(index, "insert", insert)
         return
 
+    if operation == "insert_before_line":
+        if change_type != "modified":
+            raise FileChangeOutputError(
+                f"Operation changes[{index}].operation requires change_type 'modified'."
+            )
+        _require_operation_str(index, "target", target)
+        _require_operation_str(index, "insert", insert)
+        return
+
     if operation == "replace_exact_text":
         if change_type != "modified":
             raise FileChangeOutputError(
@@ -162,6 +171,23 @@ def _validate_operation_fields(
             )
         _require_operation_str(index, "target", target)
         _require_operation_str(index, "replacement", replacement)
+        return
+
+    if operation == "replace_block":
+        if change_type != "modified":
+            raise FileChangeOutputError(
+                f"Operation changes[{index}].operation requires change_type 'modified'."
+            )
+        _require_operation_str(index, "target", target)
+        _require_operation_str(index, "replacement", replacement)
+        return
+
+    if operation == "append_to_file":
+        if change_type != "modified":
+            raise FileChangeOutputError(
+                f"Operation changes[{index}].operation requires change_type 'modified'."
+            )
+        _require_operation_str(index, "insert", insert)
         return
 
     if operation == "create_file":

@@ -1,7 +1,9 @@
 import json
 import os
+import shutil
 import shlex
 import subprocess
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -11,6 +13,23 @@ from trevvos_forge.exceptions import TestRunError
 
 
 CONFIG_PATH = Path(".trevvos") / "config.json"
+DEFAULT_SANDBOX_IGNORE_NAMES = {
+    ".git",
+    ".trevvos",
+    ".venv",
+    "venv",
+    "env",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "node_modules",
+    "dist",
+    "build",
+    "coverage",
+    "htmlcov",
+    ".DS_Store",
+}
 
 
 @dataclass(frozen=True)
@@ -27,13 +46,32 @@ class TestCommandResult:
 
 
 @dataclass(frozen=True)
+class PatchApplyResult:
+    patch_apply_check: str
+    patch_apply: str
+    stdout: str
+    stderr: str
+
+    @property
+    def status(self) -> str:
+        if self.patch_apply_check == "passed" and self.patch_apply == "passed":
+            return "passed"
+
+        return "failed"
+
+
+@dataclass(frozen=True)
 class TestRunResult:
     status: str
     commands: list[TestCommandResult]
     summary: dict[str, int]
+    mode: str = "working_tree"
+    sandbox: dict[str, Any] | None = None
 
     def to_dict(self) -> dict:
         return {
+            "mode": self.mode,
+            "sandbox": _public_sandbox_metadata(self.sandbox),
             "status": self.status,
             "commands": [
                 {
@@ -109,6 +147,8 @@ def run_test_commands(
     commands: list[str],
     repo_root: Path,
     timeout_seconds: int,
+    mode: str = "working_tree",
+    sandbox: dict[str, Any] | None = None,
 ) -> TestRunResult:
     if timeout_seconds <= 0:
         raise TestRunError("Timeout must be greater than zero seconds.")
@@ -123,6 +163,8 @@ def run_test_commands(
                 "failed": 0,
                 "timed_out": 0,
             },
+            mode=mode,
+            sandbox=sandbox,
         )
 
     command_results: list[TestCommandResult] = []
@@ -142,7 +184,135 @@ def run_test_commands(
         status=_overall_status(command_results),
         commands=command_results,
         summary=_build_summary(command_results),
+        mode=mode,
+        sandbox=sandbox,
     )
+
+
+def create_project_sandbox(
+    repo_root: Path,
+    ignore_names: set[str] | None = None,
+) -> Path:
+    resolved_root = repo_root.resolve()
+
+    if not resolved_root.exists() or not resolved_root.is_dir():
+        raise TestRunError(f"Workspace path is not a directory: {resolved_root}")
+
+    sandbox_root = Path(tempfile.mkdtemp(prefix="trevvos-forge-sandbox-"))
+    ignored_names = ignore_names or DEFAULT_SANDBOX_IGNORE_NAMES
+
+    try:
+        shutil.copytree(
+            resolved_root,
+            sandbox_root,
+            dirs_exist_ok=True,
+            ignore=_build_copy_ignore(ignored_names),
+        )
+    except Exception:
+        shutil.rmtree(sandbox_root, ignore_errors=True)
+        raise
+
+    return sandbox_root
+
+
+def apply_patch_in_sandbox(sandbox_root: Path, patch_path: Path) -> PatchApplyResult:
+    resolved_patch = patch_path.resolve()
+
+    if not resolved_patch.exists():
+        raise TestRunError(f"Patch file not found: {patch_path}")
+
+    check_result = _run_git_apply(
+        sandbox_root=sandbox_root,
+        patch_path=resolved_patch,
+        check=True,
+    )
+
+    if check_result.returncode != 0:
+        return PatchApplyResult(
+            patch_apply_check="failed",
+            patch_apply="not_run",
+            stdout=check_result.stdout,
+            stderr=check_result.stderr,
+        )
+
+    apply_result = _run_git_apply(
+        sandbox_root=sandbox_root,
+        patch_path=resolved_patch,
+        check=False,
+    )
+
+    if apply_result.returncode != 0:
+        return PatchApplyResult(
+            patch_apply_check="passed",
+            patch_apply="failed",
+            stdout=check_result.stdout + apply_result.stdout,
+            stderr=check_result.stderr + apply_result.stderr,
+        )
+
+    return PatchApplyResult(
+        patch_apply_check="passed",
+        patch_apply="passed",
+        stdout=check_result.stdout + apply_result.stdout,
+        stderr=check_result.stderr + apply_result.stderr,
+    )
+
+
+def run_tests_in_sandbox(
+    *,
+    repo_root: Path,
+    patch_path: Path,
+    commands: list[str],
+    timeout_seconds: int,
+    keep_sandbox: bool = False,
+) -> TestRunResult:
+    sandbox_root = create_project_sandbox(repo_root)
+    sandbox_metadata: dict[str, Any] = {
+        "enabled": True,
+        "kept": keep_sandbox,
+        "path": str(sandbox_root) if keep_sandbox else None,
+        "runtime_path": str(sandbox_root),
+        "patch_apply_check": "not_run",
+        "patch_apply": "not_run",
+    }
+
+    try:
+        patch_result = apply_patch_in_sandbox(
+            sandbox_root=sandbox_root,
+            patch_path=patch_path,
+        )
+        sandbox_metadata.update(
+            {
+                "patch_apply_check": patch_result.patch_apply_check,
+                "patch_apply": patch_result.patch_apply,
+                "patch_stdout": patch_result.stdout,
+                "patch_stderr": patch_result.stderr,
+            }
+        )
+
+        if patch_result.status != "passed":
+            return TestRunResult(
+                status="failed",
+                commands=[],
+                summary={
+                    "total": 0,
+                    "passed": 0,
+                    "failed": 0,
+                    "timed_out": 0,
+                },
+                mode="sandbox",
+                sandbox=sandbox_metadata,
+            )
+
+        return run_test_commands(
+            commands=commands,
+            repo_root=sandbox_root,
+            timeout_seconds=timeout_seconds,
+            mode="sandbox",
+            sandbox=sandbox_metadata,
+        )
+    finally:
+        if not keep_sandbox:
+            shutil.rmtree(sandbox_root, ignore_errors=True)
 
 
 def write_test_artifacts(session_dir: Path, result: TestRunResult) -> None:
@@ -200,6 +370,27 @@ def _run_single_command(
     )
 
 
+def _run_git_apply(
+    *,
+    sandbox_root: Path,
+    patch_path: Path,
+    check: bool,
+) -> subprocess.CompletedProcess[str]:
+    command = ["git", "apply"]
+
+    if check:
+        command.append("--check")
+
+    command.append(str(patch_path))
+
+    return subprocess.run(
+        command,
+        cwd=sandbox_root,
+        capture_output=True,
+        text=True,
+    )
+
+
 def _looks_like_python_project(repo_root: Path) -> bool:
     return any(
         (repo_root / file_name).exists()
@@ -249,7 +440,29 @@ def _build_summary(command_results: list[TestCommandResult]) -> dict[str, int]:
 
 
 def _build_output_log(result: TestRunResult) -> str:
-    parts: list[str] = []
+    parts: list[str] = [
+        f"Mode: {result.mode}",
+    ]
+
+    if result.mode == "sandbox":
+        sandbox = result.sandbox or {}
+        sandbox_path = sandbox.get("runtime_path") or sandbox.get("path") or "unavailable"
+        parts.append(f"Sandbox: {sandbox_path}")
+        parts.append(f"Patch apply check: {sandbox.get('patch_apply_check', 'not_run')}")
+        parts.append(f"Patch apply: {sandbox.get('patch_apply', 'not_run')}")
+
+        patch_stdout = sandbox.get("patch_stdout")
+        patch_stderr = sandbox.get("patch_stderr")
+
+        if isinstance(patch_stdout, str) and patch_stdout.strip():
+            parts.append(patch_stdout.rstrip("\n"))
+
+        if isinstance(patch_stderr, str) and patch_stderr.strip():
+            parts.append(patch_stderr.rstrip("\n"))
+    else:
+        parts.append("Sandbox: disabled")
+
+    parts.append("")
 
     for command in result.commands:
         parts.append(f"$ {command.command}")
@@ -265,7 +478,7 @@ def _build_output_log(result: TestRunResult) -> str:
         parts.append(f"Duration: {command.duration_seconds:.3f}s")
         parts.append("")
 
-    if not parts:
+    if not result.commands:
         parts.append("No test commands configured or detected.")
 
     return "\n".join(parts).rstrip("\n") + "\n"
@@ -295,3 +508,23 @@ def _strip_outer_quotes(value: str) -> str:
         return value[1:-1]
 
     return value
+
+
+def _build_copy_ignore(ignore_names: set[str]):
+    def ignore(_directory: str, names: list[str]) -> set[str]:
+        return {name for name in names if name in ignore_names}
+
+    return ignore
+
+
+def _public_sandbox_metadata(sandbox: dict[str, Any] | None) -> dict:
+    if sandbox is None:
+        return {
+            "enabled": False,
+        }
+
+    return {
+        key: value
+        for key, value in sandbox.items()
+        if key not in {"runtime_path", "patch_stdout", "patch_stderr"}
+    }

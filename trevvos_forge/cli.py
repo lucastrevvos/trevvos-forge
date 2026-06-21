@@ -43,6 +43,7 @@ from trevvos_forge.structured_outputs import parse_plan_output
 from trevvos_forge.test_runner import (
     load_test_commands,
     run_test_commands,
+    run_tests_in_sandbox,
     write_test_artifacts,
 )
 from trevvos_forge.workspace import read_workspace_file, scan_workspace
@@ -1086,6 +1087,14 @@ def test(
         int,
         typer.Option("--timeout", help="Timeout per command in seconds."),
     ] = 120,
+    sandbox: Annotated[
+        bool,
+        typer.Option("--sandbox", help="Run tests in a temporary copy with the session patch applied."),
+    ] = False,
+    keep_sandbox: Annotated[
+        bool,
+        typer.Option("--keep-sandbox", help="Keep the sandbox directory after running tests."),
+    ] = False,
 ) -> None:
     """
     Run configured validation commands against the current workspace state.
@@ -1112,6 +1121,8 @@ def test(
                 commands=[],
                 repo_root=workspace_root,
                 timeout_seconds=timeout,
+                mode="sandbox" if sandbox else "working_tree",
+                sandbox={"enabled": True, "kept": False, "path": None} if sandbox else None,
             )
             write_test_artifacts(session.path, result)
 
@@ -1130,28 +1141,58 @@ def test(
             console.print(f"  - test_output.log: {session.path / 'test_output.log'}")
             raise typer.Exit(code=1)
 
+        mode_label = "sandbox" if sandbox else "working_tree"
+        console.print(f"[bold]Test mode:[/bold] {mode_label}\n")
         console.print("[bold]Test commands[/bold]\n")
 
         for index, command in enumerate(commands, start=1):
             console.print(f"{index}. {command}")
 
-        if session.metadata.status != "applied":
+        if not sandbox and session.metadata.status != "applied":
             console.print(
                 "\n[yellow]Patch is not marked as applied. "
                 "Tests will run against the current working tree.[/yellow]"
             )
 
-        if not yes and not typer.confirm("\nRun these commands?", default=False):
+        confirmation_prompt = (
+            "\nRun these commands in sandbox?"
+            if sandbox
+            else "\nRun these commands?"
+        )
+
+        if not yes and not typer.confirm(confirmation_prompt, default=False):
             console.print("[yellow]Cancelled.[/yellow]")
             return
 
         console.print("\n[bold]Running tests...[/bold]\n")
 
-        result = run_test_commands(
-            commands=commands,
-            repo_root=workspace_root,
-            timeout_seconds=timeout,
-        )
+        if sandbox:
+            result = run_tests_in_sandbox(
+                repo_root=workspace_root,
+                patch_path=patch_path,
+                commands=commands,
+                timeout_seconds=timeout,
+                keep_sandbox=keep_sandbox,
+            )
+            sandbox_metadata = result.sandbox or {}
+            sandbox_path = sandbox_metadata.get("runtime_path") or sandbox_metadata.get("path")
+
+            if sandbox_path:
+                console.print(f"Sandbox created:\n{sandbox_path}\n")
+
+            console.print("[bold]Patch[/bold]")
+            console.print(f"  - git apply --check: {sandbox_metadata.get('patch_apply_check', 'not_run')}")
+            console.print(f"  - git apply: {sandbox_metadata.get('patch_apply', 'not_run')}")
+
+            if result.status == "failed" and not result.commands:
+                console.print("\n[red]Patch apply check failed in sandbox.[/red]")
+                console.print("No tests were run.")
+        else:
+            result = run_test_commands(
+                commands=commands,
+                repo_root=workspace_root,
+                timeout_seconds=timeout,
+            )
 
         write_test_artifacts(session.path, result)
 
@@ -1170,6 +1211,14 @@ def test(
         console.print("\n[bold]Artifacts[/bold]")
         console.print(f"  - test_results.json: {session.path / 'test_results.json'}")
         console.print(f"  - test_output.log: {session.path / 'test_output.log'}")
+
+        if sandbox:
+            sandbox_metadata = result.sandbox or {}
+
+            if keep_sandbox:
+                console.print(f"\n[yellow]Sandbox kept at:[/yellow]\n{sandbox_metadata.get('path')}")
+            else:
+                console.print("\n[green]Sandbox removed.[/green]")
 
         if result.status != "passed":
             raise typer.Exit(code=1)

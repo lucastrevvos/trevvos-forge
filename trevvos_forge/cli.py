@@ -27,6 +27,13 @@ from trevvos_forge.review_artifacts import (
     build_patch_preview,
     build_semantic_review_json,
 )
+from trevvos_forge.review_workflow import (
+    build_review_context,
+    build_semantic_review_prompt,
+    parse_llm_review_response,
+    render_llm_review_markdown,
+    write_llm_review_artifacts,
+)
 from trevvos_forge.sessions import (
     clean_sessions,
     create_session,
@@ -1235,6 +1242,171 @@ def test(
         raise typer.Exit(code=1)
 
 
+@app.command()
+def review(
+    session_id: Annotated[
+        str | None,
+        typer.Option("--session", "-s", help="Session ID to use. Defaults to current session."),
+    ] = None,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+    no_llm: Annotated[
+        bool,
+        typer.Option("--no-llm", help="Use deterministic session artifacts only."),
+    ] = False,
+    provider_name: Annotated[
+        str,
+        typer.Option("--provider", help="LLM provider to use for semantic review."),
+    ] = "ollama",
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="Model override for semantic review."),
+    ] = None,
+) -> None:
+    """
+    Review a generated patch using deterministic evidence and optional LLM assistance.
+    """
+    try:
+        workspace_root = path.resolve()
+
+        if session_id:
+            session = get_session(root=workspace_root, session_id=session_id)
+        else:
+            session = get_current_session(workspace_root)
+
+        context = build_review_context(session.path)
+
+        if no_llm:
+            _print_deterministic_review(session.path, context, reason=None)
+            return
+
+        if provider_name != "ollama":
+            _print_deterministic_review(
+                session.path,
+                context,
+                reason=f"Unsupported review provider: {provider_name}",
+            )
+            return
+
+        settings = load_settings()
+        review_model = model or settings.model
+        provider = OllamaProvider(
+            model=review_model,
+            base_url=settings.base_url,
+            timeout=settings.timeout,
+        )
+        prompt = build_semantic_review_prompt(context)
+
+        try:
+            with console.status("[bold]Reviewing patch with local LLM...[/bold]", spinner="dots"):
+                raw_review = provider.generate(prompt)
+        except ForgeError as exc:
+            _print_deterministic_review(
+                session.path,
+                context,
+                reason=f"LLM semantic review unavailable: {exc}",
+            )
+            return
+
+        review_payload = parse_llm_review_response(raw_review)
+        review_markdown = render_llm_review_markdown(review_payload)
+        raw_text = raw_review if review_payload.get("status") == "parse_failed" else None
+
+        write_llm_review_artifacts(
+            session_dir=session.path,
+            review=review_payload,
+            markdown=review_markdown,
+            raw_text=raw_text,
+        )
+
+        console.print("[green]Review mode: LLM-assisted[/green]\n")
+        console.print(f"Session: {session.metadata.id}")
+        console.print(f"Model:   {review_model}")
+
+        if review_payload.get("status") == "parse_failed":
+            console.print("\n[yellow]LLM review response could not be parsed.[/yellow]")
+            console.print("Saved raw response for inspection.")
+
+        console.print("\n[bold]Evidence[/bold]")
+        for evidence in context.get("evidence_used", []):
+            console.print(f"  - {evidence}")
+
+        console.print("\n[bold]LLM verdict[/bold]")
+        console.print(f"  Verdict:           {review_payload.get('verdict')}")
+        console.print(f"  Risk level:        {review_payload.get('risk_level')}")
+        console.print(f"  Request alignment: {review_payload.get('request_alignment')}")
+
+        summary = review_payload.get("summary")
+
+        if isinstance(summary, str) and summary.strip():
+            console.print("\n[bold]Summary[/bold]")
+            console.print(summary)
+
+        suggested_checks = review_payload.get("suggested_checks")
+
+        if isinstance(suggested_checks, list) and suggested_checks:
+            console.print("\n[bold]Suggested checks[/bold]")
+            for check in suggested_checks:
+                if isinstance(check, str):
+                    console.print(f"  - {check}")
+
+        console.print("\n[bold]Artifacts[/bold]")
+        console.print(f"  - llm_review.md: {session.path / 'llm_review.md'}")
+        console.print(f"  - llm_review.json: {session.path / 'llm_review.json'}")
+
+        if raw_text is not None:
+            console.print(f"  - llm_review_raw.txt: {session.path / 'llm_review_raw.txt'}")
+
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
+def _print_deterministic_review(session_path: Path, context: dict, reason: str | None) -> None:
+    console.print("[yellow]Review mode: deterministic[/yellow]\n")
+
+    if reason:
+        console.print(f"[yellow]{reason}[/yellow]\n")
+        console.print(
+            "Configure a local Ollama model with TREVVOS_FORGE_MODEL or pass --model "
+            "to run LLM-assisted review.\n"
+        )
+
+    deterministic_review = context.get("deterministic_review")
+    files_changed = context.get("files_changed")
+    warnings = context.get("warnings")
+    test_results = context.get("test_results")
+
+    console.print("[bold]Deterministic review[/bold]")
+    console.print(f"  Files changed: {len(files_changed) if isinstance(files_changed, list) else 0}")
+    console.print(f"  Warnings:      {len(warnings) if isinstance(warnings, list) else 0}")
+
+    if isinstance(deterministic_review, dict):
+        validations = deterministic_review.get("validations")
+
+        if isinstance(validations, dict):
+            console.print(f"  Safety validation: {validations.get('safety_validation', 'unknown')}")
+            console.print(f"  git apply --check: {validations.get('git_apply_check', 'unknown')}")
+    else:
+        console.print("  Safety validation: unknown")
+        console.print("  git apply --check: unknown")
+
+    if isinstance(test_results, dict):
+        console.print(f"  Test status: {test_results.get('status', 'unknown')}")
+    else:
+        console.print("  Test status: not available")
+
+    console.print("\n[bold]Artifacts[/bold]")
+    semantic_review_path = session_path / "semantic_review.json"
+
+    if semantic_review_path.exists():
+        console.print(f"  - semantic_review.json: {semantic_review_path}")
+    else:
+        console.print("  - semantic_review.json: not available")
+
+
 @models_app.command("list")
 def list_models() -> None:
     """
@@ -1457,6 +1629,9 @@ def show_session(
         test_results_path = session.path / "test_results.json"
         test_output_path = session.path / "test_output.log"
         test_error_path = session.path / "test_error.txt"
+        llm_review_path = session.path / "llm_review.md"
+        llm_review_json_path = session.path / "llm_review.json"
+        llm_review_raw_path = session.path / "llm_review_raw.txt"
 
         if prompt_metadata_path.exists():
             console.print("\n[bold]Prompt metadata[/bold]")
@@ -1565,6 +1740,18 @@ def show_session(
         if test_error_path.exists():
             console.print("\n[bold]Test error[/bold]")
             console.print(read_session_text(session, "test_error.txt"))
+
+        if llm_review_path.exists():
+            console.print("\n[bold]LLM review[/bold]")
+            console.print(f"Saved at: {llm_review_path}")
+
+        if llm_review_json_path.exists():
+            console.print("\n[bold]LLM review JSON[/bold]")
+            console.print(f"Saved at: {llm_review_json_path}")
+
+        if llm_review_raw_path.exists():
+            console.print("\n[bold]Raw LLM review[/bold]")
+            console.print(f"Saved at: {llm_review_raw_path}")
 
         console.print("\n[bold]User request[/bold]")
         console.print(user_request)

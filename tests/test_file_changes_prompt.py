@@ -19,6 +19,17 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("replace_block", prompt)
         self.assertIn("append_to_file", prompt)
 
+    def test_semantic_patch_review_prompt_contains_safety_rules(self) -> None:
+        prompt = get_prompt("semantic_patch_review").render(
+            review_context="{}",
+        )
+
+        self.assertIn("informational only", prompt)
+        self.assertIn("does not prove semantic correctness", prompt)
+        self.assertIn("Do not invent files", prompt)
+        self.assertIn("Consider warnings", prompt)
+        self.assertIn("Return ONLY valid JSON", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

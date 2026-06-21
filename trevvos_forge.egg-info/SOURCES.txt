@@ -10,6 +10,7 @@ trevvos_forge/prompt_catalog.py
 trevvos_forge/prompts.py
 trevvos_forge/sessions.py
 trevvos_forge/settings.py
+trevvos_forge/structured_outputs.py
 trevvos_forge/workspace.py
 trevvos_forge.egg-info/PKG-INFO
 trevvos_forge.egg-info/SOURCES.txt

@@ -1,19 +1,15 @@
+from pathlib import Path
 from typing import Annotated
 
 import typer
 from rich.console import Console
-from pathlib import Path
 from rich.table import Table
 
 from trevvos_forge.context_builder import build_context
-
-
-from trevvos_forge.prompt_catalog import get_prompt, list_prompts
 from trevvos_forge.engine import TrevvosForgeEngine
 from trevvos_forge.exceptions import ForgeError
+from trevvos_forge.prompt_catalog import get_prompt, list_prompts
 from trevvos_forge.providers.ollama import OllamaProvider
-from trevvos_forge.settings import ForgeSettings
-
 from trevvos_forge.sessions import (
     clean_sessions,
     create_session,
@@ -24,22 +20,21 @@ from trevvos_forge.sessions import (
     write_session_json,
     write_session_text,
 )
+from trevvos_forge.settings import ForgeSettings
+from trevvos_forge.structured_outputs import parse_plan_output
+from trevvos_forge.workspace import read_workspace_file, scan_workspace
 
-from trevvos_forge.workspace import scan_workspace, format_workspace_context, read_workspace_file
-
-def print_error(message: str) -> None:
-    err_console.print(f"[red][trevvos-forge][/red] {message}")
 
 app = typer.Typer(
-    name = "trevvos",
+    name="trevvos",
     help="Trevvos Forge: local-first AI engineering assistant.",
-    no_args_is_help=True
+    no_args_is_help=True,
 )
 
 models_app = typer.Typer(
     name="models",
     help="Manage local LLM models.",
-    no_args_is_help=True
+    no_args_is_help=True,
 )
 
 sessions_app = typer.Typer(
@@ -61,22 +56,30 @@ app.add_typer(models_app, name="models")
 console = Console()
 err_console = Console(stderr=True)
 
+
+def print_error(message: str) -> None:
+    err_console.print(f"[red][trevvos-forge][/red] {message}")
+
+
 @app.callback()
 def callback() -> None:
     """
-    Trevvos Forge CLI
+    Trevvos Forge CLI.
     """
     pass
 
+
 def load_settings() -> ForgeSettings:
     return ForgeSettings.from_env()
+
 
 def build_provider(settings: ForgeSettings) -> OllamaProvider:
     return OllamaProvider(
         model=settings.model,
         base_url=settings.base_url,
-        timeout=settings.timeout
+        timeout=settings.timeout,
     )
+
 
 def build_engine() -> TrevvosForgeEngine:
     settings = load_settings()
@@ -102,12 +105,13 @@ def ask(question: str) -> None:
         print_error(str(exc))
         raise typer.Exit(code=1)
 
+
 @app.command()
 def generate(
     instruction: str,
     language: Annotated[
         str | None,
-        typer.Option("--language", "-l", help="Target programming language.")
+        typer.Option("--language", "-l", help="Target programming language."),
     ] = None,
 ) -> None:
     """
@@ -119,7 +123,7 @@ def generate(
         with console.status("[bold]Generating code with your local LLM...[/bold]", spinner="dots"):
             result = engine.generate_code(
                 instruction=instruction,
-                language=language
+                language=language,
             )
 
         console.print(result)
@@ -127,6 +131,7 @@ def generate(
     except ForgeError as exc:
         print_error(str(exc))
         raise typer.Exit(code=1)
+
 
 @app.command()
 def doctor() -> None:
@@ -140,9 +145,9 @@ def doctor() -> None:
         console.print("[bold]Trevvos Forge Doctor[/bold]\n")
 
         console.print("[bold]Settings[/bold]")
-        console.print(f"   Model:    {settings.model}")
+        console.print(f"   Model:       {settings.model}")
         console.print(f"   Base URL:    {settings.base_url}")
-        console.print(f"   Timeout:    {settings.timeout}s")
+        console.print(f"   Timeout:     {settings.timeout}s")
 
         with console.status("[bold]Checking Ollama...[/bold]", spinner="dots"):
             models = provider.list_models()
@@ -172,12 +177,13 @@ def doctor() -> None:
         print_error(str(exc))
         raise typer.Exit(code=1)
 
+
 @app.command()
 def setup(
     model: Annotated[
         str | None,
-        typer.Option("--model", "-m", help="Model to check or pull during setup.")
-    ] = None
+        typer.Option("--model", "-m", help="Model to check or pull during setup."),
+    ] = None,
 ) -> None:
     """
     Setup Trevvos Forge local environment.
@@ -189,7 +195,7 @@ def setup(
         provider = OllamaProvider(
             model=target_model,
             base_url=settings.base_url,
-            timeout=settings.timeout
+            timeout=settings.timeout,
         )
 
         console.print("[bold]Trevvos Forge Setup[/bold]\n")
@@ -218,7 +224,7 @@ def setup(
 
         should_pull = typer.confirm(
             f"Do you want to pull {target_model} now?",
-            default=False
+            default=False,
         )
 
         if not should_pull:
@@ -249,14 +255,16 @@ def setup(
         console.print("  ollama serve")
         raise typer.Exit(code=1)
 
+
 @app.command()
-def scan(path: Annotated[
+def scan(
+    path: Annotated[
         Path,
-        typer.Argument(help="Workspace path to scan.")
+        typer.Argument(help="Workspace path to scan."),
     ] = Path("."),
     max_files: Annotated[
         int,
-        typer.Option("--max-files", help="Maxium number of files to show.")
+        typer.Option("--max-files", help="Maximum number of files to show."),
     ] = 200,
 ) -> None:
     """
@@ -302,37 +310,37 @@ def scan(path: Annotated[
 
         if len(result.files) > 50:
             console.print(
-                f"\n[yellow]Showing first 50 files. Use --max-files to control scan size.[/yellow]"
+                "\n[yellow]Showing first 50 files. Use --max-files to control scan size.[/yellow]"
             )
 
     except (FileNotFoundError, NotADirectoryError) as exc:
         print_error(str(exc))
         raise typer.Exit(code=1)
 
+
 @app.command()
 def inspect(
     file_path: Annotated[
         Path,
-        typer.Argument(help="File path inside the workspace to inspect.")
+        typer.Argument(help="File path inside the workspace to inspect."),
     ],
     path: Annotated[
         Path,
-        typer.Option("--path", "-p", help="Workspace root path.")
+        typer.Option("--path", "-p", help="Workspace root path."),
     ] = Path("."),
     max_chars: Annotated[
         int,
-        typer.Option("--max-chars", help="Maximum number of characters to read.")
-    ] = 12_000
-
+        typer.Option("--max-chars", help="Maximum number of characters to read."),
+    ] = 12_000,
 ) -> None:
     """
-    Safely inspect a file inside the workspace
+    Safely inspect a file inside the workspace.
     """
     try:
         content = read_workspace_file(
             root=path,
             file_path=file_path,
-            max_chars=max_chars
+            max_chars=max_chars,
         )
 
         console.print(f"[bold]File:[/bold] {file_path}\n")
@@ -390,7 +398,7 @@ def context(
         )
 
         console.print("[green]Context created.[/green]\n")
-        console.print(f"Session:       [bold]{session.metadata.id}[/bold]")
+        console.print(f"Session:        [bold]{session.metadata.id}[/bold]")
         console.print(f"Selected files: {len(built_context.selected_files)}")
         console.print(f"Context chars:  {built_context.total_chars}")
 
@@ -425,15 +433,17 @@ def plan(
     max_files: Annotated[
         int,
         typer.Option("--max-files", help="Maximum number of files to include in context."),
-    ] = 8,
+    ] = 5,
     max_chars: Annotated[
         int,
         typer.Option("--max-chars", help="Maximum total characters in context."),
-    ] = 30_000,
+    ] = 16_000,
 ) -> None:
     """
-    Create a technical change plan and save it into a local session.
+    Create a structured technical change plan and save it into a local session.
     """
+    session = None
+
     try:
         settings = load_settings()
         provider = build_provider(settings)
@@ -466,7 +476,7 @@ def plan(
             content=built_context.selected_files_json(),
         )
 
-        prompt_template = get_prompt("plan_change")
+        prompt_template = get_prompt("plan_change_json")
 
         prompt = prompt_template.render(
             instruction=instruction,
@@ -493,12 +503,28 @@ def plan(
         )
 
         with console.status("[bold]Planning change with your local LLM...[/bold]", spinner="dots"):
-            plan_result = provider.generate(prompt)
+            raw_plan_response = provider.generate(prompt)
+
+        write_session_text(
+            session=session,
+            file_name="plan_raw_response.md",
+            content=raw_plan_response,
+        )
+
+        plan_output = parse_plan_output(raw_plan_response)
+
+        write_session_json(
+            session=session,
+            file_name="plan.json",
+            data=plan_output.to_dict(),
+        )
+
+        plan_markdown = plan_output.to_markdown()
 
         write_session_text(
             session=session,
             file_name="plan.md",
-            content=plan_result,
+            content=plan_markdown,
         )
 
         session = update_session_status(session, "planned")
@@ -524,17 +550,29 @@ def plan(
         console.print(f"  - {session.path / 'selected_files.json'}")
         console.print(f"  - {session.path / 'prompt.md'}")
         console.print(f"  - {session.path / 'prompt_metadata.json'}")
+        console.print(f"  - {session.path / 'plan_raw_response.md'}")
+        console.print(f"  - {session.path / 'plan.json'}")
         console.print(f"  - {session.path / 'plan.md'}")
 
         console.print("\n[bold]Plan[/bold]\n")
-        console.print(plan_result)
+        console.print(plan_markdown)
 
         console.print("\n[bold]Next[/bold]")
         console.print("  trevvos diff")
 
     except ForgeError as exc:
+        if session is not None:
+            write_session_text(
+                session=session,
+                file_name="error.txt",
+                content=str(exc),
+            )
+            update_session_status(session, "plan_failed")
+
         print_error(str(exc))
         raise typer.Exit(code=1)
+
+
 @models_app.command("list")
 def list_models() -> None:
     """
@@ -566,6 +604,7 @@ def list_models() -> None:
     except ForgeError as exc:
         print_error(str(exc))
         raise typer.Exit(code=1)
+
 
 @models_app.command("pull")
 def pull_model(model: str) -> None:
@@ -733,9 +772,10 @@ def show_session(
 
         selected_files_path = session.path / "selected_files.json"
         context_path = session.path / "context.md"
-
         prompt_metadata_path = session.path / "prompt_metadata.json"
         prompt_path = session.path / "prompt.md"
+        plan_json_path = session.path / "plan.json"
+        plan_raw_response_path = session.path / "plan_raw_response.md"
         plan_path = session.path / "plan.md"
 
         if prompt_metadata_path.exists():
@@ -745,6 +785,14 @@ def show_session(
         if prompt_path.exists():
             console.print("\n[bold]Prompt[/bold]")
             console.print(f"Saved at: {prompt_path}")
+
+        if plan_json_path.exists():
+            console.print("\n[bold]Structured plan[/bold]")
+            console.print(f"Saved at: {plan_json_path}")
+
+        if plan_raw_response_path.exists():
+            console.print("\n[bold]Raw plan response[/bold]")
+            console.print(f"Saved at: {plan_raw_response_path}")
 
         if plan_path.exists():
             console.print("\n[bold]Plan[/bold]")
@@ -793,6 +841,7 @@ def clean_local_sessions(
         print_error(str(exc))
         raise typer.Exit(code=1)
 
+
 @prompts_app.command("list")
 def list_prompt_catalog() -> None:
     """
@@ -835,6 +884,7 @@ def show_prompt(name: str) -> None:
     except ForgeError as exc:
         print_error(str(exc))
         raise typer.Exit(code=1)
+
 
 def main() -> None:
     app()

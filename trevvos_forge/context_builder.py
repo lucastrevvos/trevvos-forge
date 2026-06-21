@@ -150,6 +150,9 @@ def build_context(
         except Exception:
             continue
 
+        if len(content) > file_char_limit:
+            content = _truncate_to_limit(content, file_char_limit)
+
         total_chars += len(content)
 
         selected_files.append(
@@ -170,12 +173,45 @@ def build_context(
     )
 
 
+def _truncate_to_limit(content: str, max_chars: int) -> str:
+    marker = "\n\n[... truncated by Trevvos Forge ...]"
+
+    if max_chars <= 0:
+        return ""
+
+    if len(content) <= max_chars:
+        return content
+
+    if max_chars <= len(marker):
+        return content[:max_chars]
+
+    return content[: max_chars - len(marker)] + marker
+
+
 def _rank_files(scan_result: ProjectScanResult, instruction: str) -> list[ProjectFile]:
     return sorted(
         scan_result.files,
         key=lambda file: _score_file(file, instruction),
         reverse=True,
     )
+
+
+def _path_has_token(path: str, expected_token: str) -> bool:
+    normalized_path = path.lower().replace("\\", "/")
+    tokens: set[str] = set()
+
+    for part in normalized_path.split("/"):
+        cleaned_part = (
+            part.replace(".", "_")
+            .replace("-", "_")
+            .replace(" ", "_")
+        )
+
+        for token in cleaned_part.split("_"):
+            if token:
+                tokens.add(token)
+
+    return expected_token.lower() in tokens
 
 
 def _score_file(file: ProjectFile, instruction: str) -> int:
@@ -200,7 +236,7 @@ def _score_file(file: ProjectFile, instruction: str) -> int:
             score += 35
 
     if "cli" in instruction_lower or "comando" in instruction_lower or "command" in instruction_lower:
-        if "cli" in path_lower:
+        if _path_has_token(file.path, "cli"):
             score += 50
         if file_name == "pyproject.toml":
             score += 25
@@ -244,7 +280,9 @@ def _reason_for_file(file: ProjectFile, instruction: str) -> str:
     if file.extension in CODE_EXTENSIONS:
         reasons.append("source code file")
 
-    if ("cli" in instruction_lower or "comando" in instruction_lower) and "cli" in path_lower:
+    if (
+        "cli" in instruction_lower or "comando" in instruction_lower
+    ) and _path_has_token(file.path, "cli"):
         reasons.append("matches CLI-related request")
 
     if ("test" in instruction_lower or "teste" in instruction_lower) and "test" in path_lower:

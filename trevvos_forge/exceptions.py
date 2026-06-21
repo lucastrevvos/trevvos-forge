@@ -29,8 +29,14 @@ class ConfigurationError(ForgeError):
 class WorkspaceError(ForgeError):
     """Raised when workspace access or validation fails."""
 
+
 class SessionError(ForgeError):
     """Raised when session management fails."""
 
+
 class PromptError(ForgeError):
     """Raised when prompt rendering or prompt lookup fails."""
+
+
+class StructuredOutputError(ForgeError):
+    """Raised when an LLM structured output is invalid."""

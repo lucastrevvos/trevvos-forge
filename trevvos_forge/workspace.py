@@ -5,6 +5,7 @@ from trevvos_forge.exceptions import WorkspaceError
 
 IGNORED_DIRS = {
     ".git",
+    ".trevvos",
     ".venv",
     "venv",
     "node_modules",

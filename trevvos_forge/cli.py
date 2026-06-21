@@ -11,6 +11,14 @@ from trevvos_forge.exceptions import ForgeError
 from trevvos_forge.providers.ollama import OllamaProvider
 from trevvos_forge.settings import ForgeSettings
 
+from trevvos_forge.sessions import (
+    clean_sessions,
+    create_session,
+    get_current_session,
+    list_sessions,
+    read_session_text,
+)
+
 from trevvos_forge.workspace import scan_workspace, format_workspace_context, read_workspace_file
 
 def print_error(message: str) -> None:
@@ -27,6 +35,14 @@ models_app = typer.Typer(
     help="Manage local LLM models.",
     no_args_is_help=True
 )
+
+sessions_app = typer.Typer(
+    name="sessions",
+    help="Manage Trevvos Forge local sessions.",
+    no_args_is_help=True,
+)
+
+app.add_typer(sessions_app, name="sessions")
 
 app.add_typer(models_app, name="models")
 
@@ -417,6 +433,173 @@ def pull_model(model: str) -> None:
         raise typer.Exit(code=1)
 
 
+@sessions_app.command("new")
+def new_session(
+    user_request: str,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """
+    Create a new local Forge session.
+    """
+    try:
+        session = create_session(
+            root=path,
+            user_request=user_request,
+            command="sessions new",
+        )
+
+        console.print("[green]Session created.[/green]")
+        console.print(f"ID:      [bold]{session.metadata.id}[/bold]")
+        console.print(f"Status:  {session.metadata.status}")
+        console.print(f"Path:    {session.path}")
+
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
+@sessions_app.command("current")
+def current_session(
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """
+    Show the current active session.
+    """
+    try:
+        session = get_current_session(path)
+
+        console.print("[bold]Current session[/bold]\n")
+        console.print(f"ID:        {session.metadata.id}")
+        console.print(f"Created:   {session.metadata.created_at}")
+        console.print(f"Status:    {session.metadata.status}")
+        console.print(f"Command:   {session.metadata.command}")
+        console.print(f"Workspace: {session.metadata.workspace_root}")
+
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
+@sessions_app.command("list")
+def list_local_sessions(
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """
+    List local Forge sessions.
+    """
+    try:
+        sessions = list_sessions(path)
+
+        if not sessions:
+            console.print("[yellow]No sessions found.[/yellow]")
+            return
+
+        current_id: str | None = None
+
+        try:
+            current_id = get_current_session(path).metadata.id
+        except ForgeError:
+            current_id = None
+
+        table = Table(title="Trevvos Forge Sessions")
+        table.add_column("Current")
+        table.add_column("ID")
+        table.add_column("Status")
+        table.add_column("Command")
+        table.add_column("Created")
+
+        for session in sessions:
+            marker = "*" if session.metadata.id == current_id else ""
+            table.add_row(
+                marker,
+                session.metadata.id,
+                session.metadata.status,
+                session.metadata.command,
+                session.metadata.created_at,
+            )
+
+        console.print(table)
+
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
+@sessions_app.command("show")
+def show_session(
+    session_id: Annotated[
+        str | None,
+        typer.Argument(help="Session ID to show. If omitted, shows current session."),
+    ] = None,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """
+    Show session details.
+    """
+    try:
+        if session_id:
+            from trevvos_forge.sessions import get_session
+
+            session = get_session(root=path, session_id=session_id)
+        else:
+            session = get_current_session(path)
+
+        console.print("[bold]Session[/bold]\n")
+        console.print(f"ID:        {session.metadata.id}")
+        console.print(f"Created:   {session.metadata.created_at}")
+        console.print(f"Status:    {session.metadata.status}")
+        console.print(f"Command:   {session.metadata.command}")
+        console.print(f"Workspace: {session.metadata.workspace_root}")
+        console.print(f"Path:      {session.path}")
+
+        user_request = read_session_text(session, "user_request.txt")
+
+        console.print("\n[bold]User request[/bold]")
+        console.print(user_request)
+
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
+@sessions_app.command("clean")
+def clean_local_sessions(
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """
+    Delete all local Forge sessions for this workspace.
+    """
+    confirmed = typer.confirm(
+        "This will delete .trevvos sessions for this workspace. Continue?",
+        default=False,
+    )
+
+    if not confirmed:
+        console.print("[yellow]Cancelled.[/yellow]")
+        return
+
+    try:
+        clean_sessions(path)
+        console.print("[green]Local sessions cleaned.[/green]")
+
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
 
 def main() -> None:
     app()

@@ -28,3 +28,6 @@ class ConfigurationError(ForgeError):
 
 class WorkspaceError(ForgeError):
     """Raised when workspace access or validation fails."""
+
+class SessionError(ForgeError):
+    """Raised when session management fails."""

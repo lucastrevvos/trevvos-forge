@@ -91,3 +91,11 @@ trevvos context "add tests for the CLI"
 
 trevvos context "add persistent config" --max-files 5 --max-chars 20000
 ```
+
+## Plan
+
+Create a project change plan and save it into a local session:
+
+```bash
+trevvos plan "add tests for the CLI"
+```

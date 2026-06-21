@@ -13,7 +13,7 @@ class ForgeSettings:
     def from_env(cls) -> "ForgeSettings":
         model = os.getenv("TREVVOS_FORGE_MODEL","qwen2.5-coder:7b")
         base_url = os.getenv("TREVVOS_FORGE_BASE_URL","http://localhost:11434")
-        timeout_raw = os.getenv("TREVVOS_FORGE_TIMEOUT", "120")
+        timeout_raw = os.getenv("TREVVOS_FORGE_TIMEOUT", "180")
 
         try:
             timeout = int(timeout_raw)

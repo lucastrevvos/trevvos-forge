@@ -148,6 +148,25 @@ def read_session_text(session: ForgeSession, file_name: str) -> str:
 def write_session_text(session: ForgeSession, file_name: str, content: str) -> None:
     _write_text(session.path / file_name, content)
 
+def write_session_json(session: ForgeSession, file_name: str, data: dict) -> None:
+    _write_json(session.path / file_name, data)
+
+
+def update_session_status(session: ForgeSession, status: str) -> ForgeSession:
+    metadata = SessionMetadata(
+        id=session.metadata.id,
+        created_at=session.metadata.created_at,
+        status=status,
+        command=session.metadata.command,
+        workspace_root=session.metadata.workspace_root,
+    )
+
+    _write_json(session.path / "metadata.json", asdict(metadata))
+
+    return ForgeSession(
+        metadata=metadata,
+        path=session.path,
+    )
 
 def clean_sessions(root: Path) -> None:
     workspace_root = _workspace_root(root)

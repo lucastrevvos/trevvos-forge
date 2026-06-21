@@ -7,6 +7,7 @@ from rich.table import Table
 
 from trevvos_forge.context_builder import build_context
 
+
 from trevvos_forge.prompt_catalog import get_prompt, list_prompts
 from trevvos_forge.engine import TrevvosForgeEngine
 from trevvos_forge.exceptions import ForgeError
@@ -19,6 +20,8 @@ from trevvos_forge.sessions import (
     get_current_session,
     list_sessions,
     read_session_text,
+    update_session_status,
+    write_session_json,
     write_session_text,
 )
 
@@ -417,41 +420,121 @@ def plan(
     instruction: str,
     path: Annotated[
         Path,
-        typer.Option("--path", "-p", help="Workspace path to analyze.")
+        typer.Option("--path", "-p", help="Workspace root path."),
     ] = Path("."),
     max_files: Annotated[
         int,
-        typer.Option("--max-files", help="Maximum number of files to include in context.")
-    ] = 120
+        typer.Option("--max-files", help="Maximum number of files to include in context."),
+    ] = 8,
+    max_chars: Annotated[
+        int,
+        typer.Option("--max-chars", help="Maximum total characters in context."),
+    ] = 30_000,
 ) -> None:
     """
-    Create a technical change plan using the current project structure.
+    Create a technical change plan and save it into a local session.
     """
     try:
-        engine = build_engine()
+        settings = load_settings()
+        provider = build_provider(settings)
 
-        with console.status("[bold]Scanning workspace...[/bold]", spinner="dots"):
-            scan_result = scan_workspace(path, max_files=max_files)
-            workspace_context = format_workspace_context(
-                scan=scan_result,
+        session = create_session(
+            root=path,
+            user_request=instruction,
+            command="plan",
+        )
+
+        with console.status("[bold]Building project context...[/bold]", spinner="dots"):
+            built_context = build_context(
+                root=path,
+                instruction=instruction,
                 max_files=max_files,
+                max_total_chars=max_chars,
             )
+
+        context_markdown = built_context.to_markdown()
+
+        write_session_text(
+            session=session,
+            file_name="context.md",
+            content=context_markdown,
+        )
+
+        write_session_text(
+            session=session,
+            file_name="selected_files.json",
+            content=built_context.selected_files_json(),
+        )
+
+        prompt_template = get_prompt("plan_change")
+
+        prompt = prompt_template.render(
+            instruction=instruction,
+            workspace_context=context_markdown,
+        )
+
+        write_session_text(
+            session=session,
+            file_name="prompt.md",
+            content=prompt,
+        )
+
+        write_session_json(
+            session=session,
+            file_name="prompt_metadata.json",
+            data={
+                "name": prompt_template.name,
+                "version": prompt_template.version,
+                "ref": prompt_template.ref,
+                "description": prompt_template.description,
+                "model": settings.model,
+                "provider": "ollama",
+            },
+        )
 
         with console.status("[bold]Planning change with your local LLM...[/bold]", spinner="dots"):
-            result = engine.plan_change(
-                instruction=instruction,
-                workspace_context=workspace_context,
-            )
+            plan_result = provider.generate(prompt)
 
-        console.print(result)
+        write_session_text(
+            session=session,
+            file_name="plan.md",
+            content=plan_result,
+        )
 
-    except (FileNotFoundError, NotADirectoryError) as exc:
-            print_error(str(exc))
-            raise typer.Exit(code=1)
+        session = update_session_status(session, "planned")
+
+        console.print("[green]Plan created.[/green]\n")
+        console.print(f"Session:        [bold]{session.metadata.id}[/bold]")
+        console.print(f"Status:         {session.metadata.status}")
+        console.print(f"Prompt:         {prompt_template.ref}")
+        console.print(f"Model:          {settings.model}")
+        console.print(f"Selected files: {len(built_context.selected_files)}")
+        console.print(f"Context chars:  {built_context.total_chars}")
+
+        if built_context.selected_files:
+            console.print("\n[bold]Selected files[/bold]")
+            for selected_file in built_context.selected_files:
+                console.print(
+                    f"  - {selected_file.path} "
+                    f"[dim](score={selected_file.score}; {selected_file.reason})[/dim]"
+                )
+
+        console.print("\n[bold]Saved files[/bold]")
+        console.print(f"  - {session.path / 'context.md'}")
+        console.print(f"  - {session.path / 'selected_files.json'}")
+        console.print(f"  - {session.path / 'prompt.md'}")
+        console.print(f"  - {session.path / 'prompt_metadata.json'}")
+        console.print(f"  - {session.path / 'plan.md'}")
+
+        console.print("\n[bold]Plan[/bold]\n")
+        console.print(plan_result)
+
+        console.print("\n[bold]Next[/bold]")
+        console.print("  trevvos diff")
+
     except ForgeError as exc:
-            print_error(str(exc))
-            raise typer.Exit(code=1)
-
+        print_error(str(exc))
+        raise typer.Exit(code=1)
 @models_app.command("list")
 def list_models() -> None:
     """
@@ -650,6 +733,22 @@ def show_session(
 
         selected_files_path = session.path / "selected_files.json"
         context_path = session.path / "context.md"
+
+        prompt_metadata_path = session.path / "prompt_metadata.json"
+        prompt_path = session.path / "prompt.md"
+        plan_path = session.path / "plan.md"
+
+        if prompt_metadata_path.exists():
+            console.print("\n[bold]Prompt metadata[/bold]")
+            console.print(read_session_text(session, "prompt_metadata.json"))
+
+        if prompt_path.exists():
+            console.print("\n[bold]Prompt[/bold]")
+            console.print(f"Saved at: {prompt_path}")
+
+        if plan_path.exists():
+            console.print("\n[bold]Plan[/bold]")
+            console.print(read_session_text(session, "plan.md"))
 
         if selected_files_path.exists():
             console.print("\n[bold]Selected files[/bold]")

@@ -100,3 +100,13 @@ trevvos prompts list
 
 trevvos prompts show plan_change
 ```
+
+## Context
+
+Build automatic context for a request:
+
+```bash
+trevvos context "add tests for the CLI"
+
+trevvos context "add persistent config" --max-files 5 --max-chars 20000
+```

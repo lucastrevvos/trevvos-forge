@@ -123,16 +123,18 @@ The diff command saves:
 
 ## Diff validation
 
-Generated diffs are validated before apply.
+Generated diffs are validated in two steps:
 
-The validation checks:
+1. Trevvos safety validation:
+   - unsafe paths;
+   - sensitive files;
+   - ignored directories;
+   - binary patches;
+   - deletion attempts;
+   - existing files modified outside selected context.
 
-- unsafe paths;
-- sensitive files;
-- ignored directories;
-- binary patches;
-- deletion attempts;
-- existing files modified outside the selected context.
+2. Git applicability validation:
+   - `git apply --check` must pass before a session can become `diff_validated`.
 
 ## Apply
 

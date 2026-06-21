@@ -618,13 +618,14 @@ def diff(
     session = None
 
     try:
+        workspace_root = path.resolve()
         settings = load_settings()
         provider = build_provider(settings)
 
         if session_id:
-            session = get_session(root=path, session_id=session_id)
+            session = get_session(root=workspace_root, session_id=session_id)
         else:
-            session = get_current_session(path)
+            session = get_current_session(workspace_root)
 
         context_path = session.path / "context.md"
         plan_path = session.path / "plan.md"
@@ -684,7 +685,7 @@ def diff(
         )
 
         validation_result = validate_diff_patch(
-            workspace_root=path,
+            workspace_root=workspace_root,
             session=session,
             diff_text=unified_diff,
         )
@@ -695,9 +696,20 @@ def diff(
             data=validation_result.to_dict(),
         )
 
+        check_patch(workspace_root=workspace_root, session=session)
+
+        write_session_json(
+            session=session,
+            file_name="diff_check.json",
+            data={
+                "git_apply_check": "passed",
+                "patch_path": str(session.path / "diff.patch"),
+            },
+        )
+
         session = update_session_status(session, "diff_validated")
 
-        console.print("[green]Diff generated and validated.[/green]\n")
+        console.print("[green]Diff generated, safe, and applicable.[/green]\n")
         console.print(f"Session: {session.metadata.id}")
         console.print(f"Status:  {session.metadata.status}")
         console.print(f"Prompt:  {prompt_template.ref}")
@@ -712,6 +724,7 @@ def diff(
         console.print(f"  - {session.path / 'diff_raw_response.patch'}")
         console.print(f"  - {session.path / 'diff.patch'}")
         console.print(f"  - {session.path / 'diff_validation.json'}")
+        console.print(f"  - {session.path / 'diff_check.json'}")
 
         console.print("\n[bold]Next[/bold]")
         console.print("  trevvos apply")
@@ -726,6 +739,23 @@ def diff(
             update_session_status(session, "diff_validation_failed")
 
         print_error(str(exc))
+        raise typer.Exit(code=1)
+
+    except ApplyError as exc:
+        message = (
+            "Diff rejected: patch passed safety validation but failed git apply --check. "
+            f"{exc}"
+        )
+
+        if session is not None:
+            write_session_text(
+                session=session,
+                file_name="diff_check_error.txt",
+                content=message,
+            )
+            update_session_status(session, "diff_check_failed")
+
+        print_error(message)
         raise typer.Exit(code=1)
 
     except ForgeError as exc:
@@ -1043,6 +1073,8 @@ def show_session(
         diff_error_path = session.path / "diff_error.txt"
         diff_validation_path = session.path / "diff_validation.json"
         diff_validation_error_path = session.path / "diff_validation_error.txt"
+        diff_check_path = session.path / "diff_check.json"
+        diff_check_error_path = session.path / "diff_check_error.txt"
         apply_result_path = session.path / "apply_result.json"
         apply_error_path = session.path / "apply_error.txt"
 
@@ -1101,6 +1133,14 @@ def show_session(
         if diff_validation_error_path.exists():
             console.print("\n[bold]Diff validation error[/bold]")
             console.print(read_session_text(session, "diff_validation_error.txt"))
+
+        if diff_check_path.exists():
+            console.print("\n[bold]Diff git check[/bold]")
+            console.print(f"Saved at: {diff_check_path}")
+
+        if diff_check_error_path.exists():
+            console.print("\n[bold]Diff git check error[/bold]")
+            console.print(read_session_text(session, "diff_check_error.txt"))
 
         if apply_result_path.exists():
             console.print("\n[bold]Apply result[/bold]")

@@ -42,6 +42,10 @@ class StructuredOutputError(ForgeError):
     """Raised when an LLM structured output is invalid."""
 
 
+class FileChangeOutputError(ForgeError):
+    """Raised when structured file change output is invalid."""
+
+
 class DiffError(ForgeError):
     """Raised when diff generation or parsing fails."""
 

@@ -1,5 +1,6 @@
 import json
-from dataclasses import asdict, dataclass
+import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from trevvos_forge.workspace import (
@@ -13,6 +14,7 @@ from trevvos_forge.workspace import (
 DEFAULT_MAX_FILES = 8
 DEFAULT_MAX_TOTAL_CHARS = 30_000
 DEFAULT_MAX_CHARS_PER_FILE = 8_000
+TRUNCATION_MARKER = "\n\n[... truncated by Trevvos Forge ...]"
 
 
 HIGH_VALUE_FILES = {
@@ -44,12 +46,30 @@ CODE_EXTENSIONS = {
 
 
 @dataclass(frozen=True)
+class MarkdownHeading:
+    line: int
+    level: int
+    text: str
+
+
+@dataclass(frozen=True)
+class ContextRange:
+    start_line: int
+    end_line: int
+
+
+@dataclass(frozen=True)
 class ContextFile:
     path: str
     size_bytes: int
     score: int
     reason: str
     content: str
+    content_with_line_numbers: str
+    markdown_headings: list[MarkdownHeading]
+    is_truncated: bool
+    included_ranges: list[ContextRange]
+    total_lines: int
 
 
 @dataclass(frozen=True)
@@ -63,15 +83,30 @@ class BuiltContext:
         files_block = []
 
         for selected_file in self.selected_files:
+            headings_block = _markdown_headings_json(selected_file.markdown_headings)
+            ranges_block = _included_ranges_json(selected_file.included_ranges)
             files_block.append(
                 f"""## File: {selected_file.path}
 
 Reason: {selected_file.reason}
 Score: {selected_file.score}
 Size: {selected_file.size_bytes} bytes
+Truncated: {str(selected_file.is_truncated).lower()}
+Total lines: {selected_file.total_lines}
+Included ranges:
+{ranges_block}
+
+Markdown headings:
+{headings_block}
 
 ```text
 {selected_file.content}
+```
+
+Content with line numbers (editorial aid only; do not copy line numbers into final file content):
+
+```text
+{selected_file.content_with_line_numbers}
 ```"""
             )
 
@@ -107,6 +142,23 @@ Size: {selected_file.size_bytes} bytes
                     "size_bytes": file.size_bytes,
                     "score": file.score,
                     "reason": file.reason,
+                    "is_truncated": file.is_truncated,
+                    "included_ranges": [
+                        {
+                            "start_line": included_range.start_line,
+                            "end_line": included_range.end_line,
+                        }
+                        for included_range in file.included_ranges
+                    ],
+                    "total_lines": file.total_lines,
+                    "markdown_headings": [
+                        {
+                            "line": heading.line,
+                            "level": heading.level,
+                            "text": heading.text,
+                        }
+                        for heading in file.markdown_headings
+                    ],
                 }
                 for file in self.selected_files
             ],
@@ -142,16 +194,23 @@ def build_context(
             break
 
         try:
-            content = read_workspace_file(
+            raw_content = read_workspace_file(
                 root=root,
                 file_path=Path(candidate.path),
-                max_chars=file_char_limit,
+                max_chars=max(candidate.size_bytes + 1, file_char_limit),
             )
         except Exception:
             continue
 
-        if len(content) > file_char_limit:
-            content = _truncate_to_limit(content, file_char_limit)
+        total_lines = _count_lines(raw_content)
+        is_truncated = len(raw_content) > file_char_limit
+
+        if is_truncated:
+            content = _truncate_to_limit(raw_content, file_char_limit)
+        else:
+            content = raw_content
+
+        included_ranges = [_included_range_for_content(content)]
 
         total_chars += len(content)
 
@@ -162,6 +221,13 @@ def build_context(
                 score=_score_file(candidate, instruction),
                 reason=_reason_for_file(candidate, instruction),
                 content=content,
+                content_with_line_numbers=content_with_line_numbers(content),
+                markdown_headings=extract_markdown_headings(content)
+                if candidate.path.lower().endswith(".md")
+                else [],
+                is_truncated=is_truncated,
+                included_ranges=included_ranges,
+                total_lines=total_lines,
             )
         )
 
@@ -174,18 +240,100 @@ def build_context(
 
 
 def _truncate_to_limit(content: str, max_chars: int) -> str:
-    marker = "\n\n[... truncated by Trevvos Forge ...]"
-
     if max_chars <= 0:
         return ""
 
     if len(content) <= max_chars:
         return content
 
-    if max_chars <= len(marker):
+    if max_chars <= len(TRUNCATION_MARKER):
         return content[:max_chars]
 
-    return content[: max_chars - len(marker)] + marker
+    return content[: max_chars - len(TRUNCATION_MARKER)] + TRUNCATION_MARKER
+
+
+def content_with_line_numbers(content: str) -> str:
+    return "\n".join(
+        f"{line_number} | {line}"
+        for line_number, line in enumerate(content.splitlines(), start=1)
+    )
+
+
+def extract_markdown_headings(content: str) -> list[MarkdownHeading]:
+    headings: list[MarkdownHeading] = []
+    heading_pattern = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+    in_fenced_code_block = False
+
+    for line_number, line in enumerate(content.splitlines(), start=1):
+        stripped_line = line.strip()
+
+        if stripped_line.startswith("```") or stripped_line.startswith("~~~"):
+            in_fenced_code_block = not in_fenced_code_block
+            continue
+
+        if in_fenced_code_block:
+            continue
+
+        match = heading_pattern.match(line)
+
+        if match is None:
+            continue
+
+        headings.append(
+            MarkdownHeading(
+                line=line_number,
+                level=len(match.group(1)),
+                text=match.group(2).strip(),
+            )
+        )
+
+    return headings
+
+
+def _count_lines(content: str) -> int:
+    if not content:
+        return 0
+
+    return len(content.splitlines())
+
+
+def _included_range_for_content(content: str) -> ContextRange:
+    included_content = content.split(TRUNCATION_MARKER, 1)[0]
+    line_count = _count_lines(included_content)
+
+    return ContextRange(
+        start_line=1 if line_count else 0,
+        end_line=line_count,
+    )
+
+
+def _markdown_headings_json(headings: list[MarkdownHeading]) -> str:
+    return json.dumps(
+        [
+            {
+                "line": heading.line,
+                "level": heading.level,
+                "text": heading.text,
+            }
+            for heading in headings
+        ],
+        indent=2,
+        ensure_ascii=False,
+    )
+
+
+def _included_ranges_json(included_ranges: list[ContextRange]) -> str:
+    return json.dumps(
+        [
+            {
+                "start_line": included_range.start_line,
+                "end_line": included_range.end_line,
+            }
+            for included_range in included_ranges
+        ],
+        indent=2,
+        ensure_ascii=False,
+    )
 
 
 def _rank_files(scan_result: ProjectScanResult, instruction: str) -> list[ProjectFile]:

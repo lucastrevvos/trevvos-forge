@@ -189,6 +189,14 @@ Nao aplique as mudancas.
 Nao delete arquivos.
 Nao modifique arquivos fora do contexto fornecido.
 Nao modifique .env, .git, .venv, node_modules, .trevvos, bin ou obj.
+Preserve integralmente o conteudo existente, exceto pelas mudancas explicitamente pedidas.
+Altere o minimo necessario.
+Nao reordene secoes, imports, blocos, listas ou paragrafos sem necessidade.
+Nao copie numeros de linha do contexto para o conteudo final.
+Nao concatene o texto novo em um paragrafo existente quando a intencao for inserir abaixo, depois, antes ou em nova linha.
+Se o contexto indicar que um arquivo esta truncado, nao invente o restante do arquivo.
+Se nao houver contexto suficiente para fazer a edicao com seguranca, retorne:
+{{"error": "contexto insuficiente para editar com seguranca", "changes": []}}
 
 O JSON deve seguir exatamente este formato:
 
@@ -209,6 +217,12 @@ Regras:
 - Nao omita partes de arquivos modificados.
 - Nao use placeholders como "...".
 - Nao invente arquivos desnecessarios.
+- Quando o usuario pedir algo "abaixo", "depois", "antes" ou "em nova linha", nao concatene o texto novo em um paragrafo existente.
+- Para Markdown, "abaixo do titulo principal" significa inserir depois da linha do heading principal, normalmente separado por uma linha em branco.
+- Para Markdown, preserve headings, listas, links e blocos de codigo.
+- Para Markdown, nao junte uma tagline ou frase nova no mesmo paragrafo existente se a intencao for criar uma linha ou bloco abaixo de um heading.
+- Use "Content with line numbers" e "Markdown headings" apenas como auxilio editorial para localizar a edicao.
+- O campo "content" nunca deve conter numeros de linha do contexto.
 
 Contexto do projeto:
 {workspace_context}

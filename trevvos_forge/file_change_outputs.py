@@ -38,6 +38,11 @@ def parse_file_changes_output(raw_response: str) -> FileChangesOutput:
     if not isinstance(data, dict):
         raise FileChangeOutputError("File changes output must be a JSON object.")
 
+    error = data.get("error")
+
+    if isinstance(error, str) and error.strip():
+        raise FileChangeOutputError(f"The model could not produce safe file changes: {error.strip()}")
+
     changes = data.get("changes")
 
     if not isinstance(changes, list):

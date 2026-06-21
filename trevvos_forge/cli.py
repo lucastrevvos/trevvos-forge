@@ -699,9 +699,11 @@ def diff(
             data=file_changes.to_dict(),
         )
 
+        diff_warnings: list[str] = []
         unified_diff = build_unified_diff_from_file_changes(
             workspace_root=workspace_root,
             file_changes=file_changes,
+            warnings=diff_warnings,
         )
 
         write_session_text(
@@ -709,6 +711,15 @@ def diff(
             file_name="diff.patch",
             content=unified_diff,
         )
+
+        if diff_warnings:
+            write_session_json(
+                session=session,
+                file_name="diff_warnings.json",
+                data={"warnings": diff_warnings},
+            )
+        else:
+            _delete_session_files(session.path, ["diff_warnings.json"])
 
         validation_result = validate_diff_patch(
             workspace_root=workspace_root,
@@ -756,12 +767,23 @@ def diff(
             action = "CREATE" if change.change_type == "created" else "MODIFY"
             console.print(f"  - {action} {change.path}")
 
+        if diff_warnings:
+            console.print("\n[bold yellow]Warnings[/bold yellow]")
+            for warning in diff_warnings:
+                console.print(f"  - {warning}")
+
         console.print("\n[bold]Saved files[/bold]")
         console.print(f"  - {session.path / 'file_changes_raw_response.json'}")
         console.print(f"  - {session.path / 'file_changes.json'}")
         console.print(f"  - {session.path / 'diff.patch'}")
+        if diff_warnings:
+            console.print(f"  - {session.path / 'diff_warnings.json'}")
         console.print(f"  - {session.path / 'diff_validation.json'}")
         console.print(f"  - {session.path / 'diff_check.json'}")
+
+        console.print("\n[bold]Validation[/bold]")
+        console.print("  - Trevvos safety validation: OK")
+        console.print("  - git apply --check: OK")
 
         console.print("\n[bold]Next[/bold]")
         console.print("  trevvos apply")
@@ -864,6 +886,7 @@ def apply(
         console.print("[green]Patch ready to apply.[/green]\n")
         console.print(f"Session: {session.metadata.id}")
         console.print(f"Status:  {session.metadata.status}")
+        console.print(f"Patch:   {patch_path}")
 
         console.print("\n[bold]Changes[/bold]")
         for change in changes:
@@ -876,8 +899,16 @@ def apply(
             if isinstance(path_value, str):
                 console.print(f"  - {_format_change_action(change_type)} {path_value}")
 
+        warnings_path = session.path / "diff_warnings.json"
+
+        if warnings_path.exists():
+            console.print("\n[bold yellow]Warnings[/bold yellow]")
+            console.print(read_session_text(session, "diff_warnings.json"))
+
+        console.print("\nValidation")
+        console.print("  - Trevvos safety validation: OK")
         check_patch(workspace_root=workspace_root, session=session)
-        console.print("\nGit check: [green]OK[/green]")
+        console.print("  - git apply --check: [green]OK[/green]")
 
         if not yes and not typer.confirm("Apply this patch?", default=False):
             console.print("[yellow]Cancelled.[/yellow]")
@@ -1122,6 +1153,7 @@ def show_session(
         file_changes_error_path = session.path / "file_changes_error.txt"
         diff_raw_response_path = session.path / "diff_raw_response.patch"
         diff_path = session.path / "diff.patch"
+        diff_warnings_path = session.path / "diff_warnings.json"
         diff_error_path = session.path / "diff_error.txt"
         diff_validation_path = session.path / "diff_validation.json"
         diff_validation_error_path = session.path / "diff_validation_error.txt"
@@ -1185,6 +1217,10 @@ def show_session(
         if diff_path.exists():
             console.print("\n[bold]Diff[/bold]")
             console.print(f"Saved at: {diff_path}")
+
+        if diff_warnings_path.exists():
+            console.print("\n[bold yellow]Diff warnings[/bold yellow]")
+            console.print(read_session_text(session, "diff_warnings.json"))
 
         if diff_error_path.exists():
             console.print("\n[bold]Diff error[/bold]")

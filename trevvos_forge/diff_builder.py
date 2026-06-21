@@ -9,6 +9,7 @@ def build_unified_diff_from_file_changes(
     *,
     workspace_root: Path,
     file_changes: FileChangesOutput,
+    warnings: list[str] | None = None,
 ) -> str:
     resolved_root = workspace_root.resolve()
     patch_parts: list[str] = []
@@ -19,6 +20,7 @@ def build_unified_diff_from_file_changes(
             workspace_root=resolved_root,
             relative_path=relative_path,
             change=change,
+            warnings=warnings,
         )
 
         if file_patch:
@@ -30,7 +32,13 @@ def build_unified_diff_from_file_changes(
     return "\n".join(patch_parts).rstrip("\n") + "\n"
 
 
-def _build_file_diff(*, workspace_root: Path, relative_path: str, change: FileChange) -> str:
+def _build_file_diff(
+    *,
+    workspace_root: Path,
+    relative_path: str,
+    change: FileChange,
+    warnings: list[str] | None,
+) -> str:
     target_path = (workspace_root / relative_path).resolve()
 
     try:
@@ -57,6 +65,7 @@ def _build_file_diff(*, workspace_root: Path, relative_path: str, change: FileCh
             relative_path=relative_path,
             old_lines=old_lines,
             new_lines=_content_to_lines(change.content),
+            warnings=warnings,
         )
         fromfile = f"a/{relative_path}"
     elif change.change_type == "created":
@@ -106,6 +115,7 @@ def _complete_possible_truncated_content(
     relative_path: str,
     old_lines: list[str],
     new_lines: list[str],
+    warnings: list[str] | None,
 ) -> list[str]:
     if not old_lines or not new_lines or len(new_lines) >= len(old_lines):
         return new_lines
@@ -114,6 +124,12 @@ def _complete_possible_truncated_content(
         old_lines=old_lines,
         new_lines=new_lines,
     )
+
+    if len(completed_lines) > len(new_lines) and warnings is not None:
+        warnings.append(
+            "WARNING: LLM output appears truncated. Forge preserved the unchanged "
+            f"file tail automatically for {relative_path}. Review the generated patch before applying."
+        )
 
     removed_line_count = len(old_lines) - len(completed_lines)
 

@@ -3,6 +3,7 @@ from pathlib import Path, PurePosixPath
 
 from trevvos_forge.exceptions import DiffError
 from trevvos_forge.file_change_outputs import FileChange, FileChangesOutput
+from trevvos_forge.operation_applier import apply_operation_change
 
 
 def build_unified_diff_from_file_changes(
@@ -46,7 +47,26 @@ def _build_file_diff(
     except ValueError as exc:
         raise DiffError(f"Refusing to build diff for path outside workspace: {relative_path}") from exc
 
-    if change.change_type == "modified":
+    if change.mode == "operation_based_edit":
+        operation_result = apply_operation_change(change, workspace_root)
+
+        if operation_result.warnings and warnings is not None:
+            warnings.extend(operation_result.warnings)
+
+        if operation_result.original_content is None:
+            old_lines = []
+            fromfile = "/dev/null"
+        else:
+            old_lines = _content_to_lines(operation_result.original_content)
+            fromfile = f"a/{relative_path}"
+
+        new_lines = _content_to_lines(operation_result.new_content)
+        change_type = "created" if operation_result.original_content is None else "modified"
+    elif change.mode != "full_file_rewrite":
+        raise DiffError(f"Unsupported file change mode: {change.mode}")
+    elif change.content is None:
+        raise DiffError(f"Missing full file content for: {relative_path}")
+    elif change.change_type == "modified":
         if not target_path.exists():
             raise DiffError(f"Cannot modify missing file: {relative_path}")
 
@@ -68,6 +88,7 @@ def _build_file_diff(
             warnings=warnings,
         )
         fromfile = f"a/{relative_path}"
+        change_type = "modified"
     elif change.change_type == "created":
         if target_path.exists():
             raise DiffError(f"Cannot create file because it already exists: {relative_path}")
@@ -75,6 +96,7 @@ def _build_file_diff(
         old_lines = []
         new_lines = _content_to_lines(change.content)
         fromfile = "/dev/null"
+        change_type = "created"
     else:
         raise DiffError(f"Unsupported file change type: {change.change_type}")
 
@@ -95,7 +117,7 @@ def _build_file_diff(
 
     header_lines = [f"diff --git a/{relative_path} b/{relative_path}"]
 
-    if change.change_type == "created":
+    if change_type == "created":
         header_lines.append("new file mode 100644")
 
     return "\n".join(header_lines) + "\n" + "".join(diff_lines).rstrip("\n")

@@ -194,17 +194,68 @@ Altere o minimo necessario.
 Nao reordene secoes, imports, blocos, listas ou paragrafos sem necessidade.
 Nao copie numeros de linha do contexto para o conteudo final.
 Nao concatene o texto novo em um paragrafo existente quando a intencao for inserir abaixo, depois, antes ou em nova linha.
+Prefira "mode": "operation_based_edit" para alteracoes locais.
+Use "mode": "full_file_rewrite" somente quando uma operacao local nao for suficiente.
+Para Markdown, use "operation": "insert_after_heading" quando o pedido disser abaixo do titulo, depois da secao ou equivalente.
+Para insercao depois de uma linha exata, use "operation": "insert_after_line".
+Para substituicao textual simples, use "operation": "replace_exact_text".
+Para criacao de arquivo, use "operation": "create_file".
 Se o contexto indicar que um arquivo esta truncado, nao invente o restante do arquivo.
 Se nao houver contexto suficiente para fazer a edicao com seguranca, retorne:
 {{"error": "contexto insuficiente para editar com seguranca", "changes": []}}
 
-O JSON deve seguir exatamente este formato:
+Exemplo preferencial para edicao local:
 
 {{
   "changes": [
     {{
       "path": "README.md",
       "change_type": "modified",
+      "mode": "operation_based_edit",
+      "operation": "insert_after_heading",
+      "target": "# Trevvos Forge",
+      "insert": "Local-first AI engineering assistant powered by local LLMs."
+    }}
+  ]
+}}
+
+Exemplo para substituicao textual:
+
+{{
+  "changes": [
+    {{
+      "path": "README.md",
+      "change_type": "modified",
+      "mode": "operation_based_edit",
+      "operation": "replace_exact_text",
+      "target": "texto antigo",
+      "replacement": "texto novo"
+    }}
+  ]
+}}
+
+Exemplo para criar arquivo:
+
+{{
+  "changes": [
+    {{
+      "path": "docs/usage.md",
+      "change_type": "created",
+      "mode": "operation_based_edit",
+      "operation": "create_file",
+      "content": "# Usage\\n\\nHello.\\n"
+    }}
+  ]
+}}
+
+Formato legado ainda aceito para reescrita completa:
+
+{{
+  "changes": [
+    {{
+      "path": "README.md",
+      "change_type": "modified",
+      "mode": "full_file_rewrite",
       "content": "conteudo completo final do arquivo"
     }}
   ]
@@ -212,8 +263,13 @@ O JSON deve seguir exatamente este formato:
 
 Regras:
 - "change_type" deve ser "modified" ou "created".
+- "mode" deve ser "operation_based_edit" ou "full_file_rewrite"; se usar operacao local, sempre informe "operation".
 - Para arquivos modificados, "content" deve conter o conteudo completo final do arquivo.
 - Para arquivos criados, "content" deve conter o conteudo completo do novo arquivo.
+- Para "insert_after_heading", informe "target" e "insert".
+- Para "insert_after_line", informe "target" e "insert".
+- Para "replace_exact_text", informe "target" e "replacement".
+- Para "create_file", informe "content".
 - Nao omita partes de arquivos modificados.
 - Nao use placeholders como "...".
 - Nao invente arquivos desnecessarios.

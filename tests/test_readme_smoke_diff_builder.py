@@ -28,7 +28,11 @@ class ReadmeSmokeDiffBuilderTests(unittest.TestCase):
                         FileChange(
                             path="README.md",
                             change_type="modified",
-                            content=expected,
+                            content=None,
+                            mode="operation_based_edit",
+                            operation="insert_after_heading",
+                            target="# Trevvos Forge",
+                            insert="Local-first AI engineering assistant powered by local LLMs.",
                         )
                     ]
                 ),
@@ -73,6 +77,7 @@ class ReadmeSmokeDiffBuilderTests(unittest.TestCase):
                             path="README.md",
                             change_type="modified",
                             content=partial_final,
+                            mode="full_file_rewrite",
                         )
                     ]
                 ),

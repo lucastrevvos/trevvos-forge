@@ -99,3 +99,24 @@ Create a project change plan and save it into a local session:
 ```bash
 trevvos plan "add tests for the CLI"
 ```
+
+## Diff
+
+Generate a diff from the current planned session:
+
+```bash
+trevvos diff
+```
+
+Use a specific session:
+
+```bash
+trevvos diff --session <session-id>
+```
+
+The diff command saves:
+
+- `diff_prompt.md`
+- `diff_prompt_metadata.json`
+- `diff_raw_response.patch`
+- `diff.patch`

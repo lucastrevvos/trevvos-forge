@@ -6,14 +6,16 @@ from rich.console import Console
 from rich.table import Table
 
 from trevvos_forge.context_builder import build_context
+from trevvos_forge.diff_outputs import extract_unified_diff
 from trevvos_forge.engine import TrevvosForgeEngine
-from trevvos_forge.exceptions import ForgeError
+from trevvos_forge.exceptions import DiffError, ForgeError
 from trevvos_forge.prompt_catalog import get_prompt, list_prompts
 from trevvos_forge.providers.ollama import OllamaProvider
 from trevvos_forge.sessions import (
     clean_sessions,
     create_session,
     get_current_session,
+    get_session,
     list_sessions,
     read_session_text,
     update_session_status,
@@ -573,6 +575,121 @@ def plan(
         raise typer.Exit(code=1)
 
 
+@app.command()
+def diff(
+    session_id: Annotated[
+        str | None,
+        typer.Option("--session", "-s", help="Session ID to use. Defaults to current session."),
+    ] = None,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """
+    Generate a unified diff from a saved plan session.
+    """
+    session = None
+
+    try:
+        settings = load_settings()
+        provider = build_provider(settings)
+
+        if session_id:
+            session = get_session(root=path, session_id=session_id)
+        else:
+            session = get_current_session(path)
+
+        context_path = session.path / "context.md"
+        plan_path = session.path / "plan.md"
+
+        if not context_path.exists():
+            raise DiffError("Session is missing context.md. Run trevvos plan before trevvos diff.")
+
+        if not plan_path.exists():
+            raise DiffError("Session is missing plan.md. Run trevvos plan before trevvos diff.")
+
+        instruction = read_session_text(session, "user_request.txt")
+        workspace_context = read_session_text(session, "context.md")
+        plan_markdown = read_session_text(session, "plan.md")
+
+        prompt_template = get_prompt("diff_generation")
+
+        prompt = prompt_template.render(
+            instruction=instruction,
+            workspace_context=workspace_context,
+            plan=plan_markdown,
+        )
+
+        write_session_text(
+            session=session,
+            file_name="diff_prompt.md",
+            content=prompt,
+        )
+
+        write_session_json(
+            session=session,
+            file_name="diff_prompt_metadata.json",
+            data={
+                "name": prompt_template.name,
+                "version": prompt_template.version,
+                "ref": prompt_template.ref,
+                "description": prompt_template.description,
+                "model": settings.model,
+                "provider": "ollama",
+            },
+        )
+
+        with console.status("[bold]Generating diff with your local LLM...[/bold]", spinner="dots"):
+            raw_diff_response = provider.generate(prompt)
+
+        write_session_text(
+            session=session,
+            file_name="diff_raw_response.patch",
+            content=raw_diff_response,
+        )
+
+        unified_diff = extract_unified_diff(raw_diff_response)
+
+        write_session_text(
+            session=session,
+            file_name="diff.patch",
+            content=unified_diff,
+        )
+
+        session = update_session_status(session, "diffed")
+
+        console.print("[green]Diff generated.[/green]\n")
+        console.print(f"Session: {session.metadata.id}")
+        console.print(f"Status:  {session.metadata.status}")
+        console.print(f"Prompt:  {prompt_template.ref}")
+        console.print(f"Model:   {settings.model}")
+
+        console.print("\n[bold]Saved files[/bold]")
+        console.print(f"  - {session.path / 'diff_prompt.md'}")
+        console.print(f"  - {session.path / 'diff_prompt_metadata.json'}")
+        console.print(f"  - {session.path / 'diff_raw_response.patch'}")
+        console.print(f"  - {session.path / 'diff.patch'}")
+
+        console.print("\n[bold]Diff[/bold]\n")
+        console.print(unified_diff)
+
+        console.print("\n[bold]Next[/bold]")
+        console.print("  trevvos apply")
+
+    except ForgeError as exc:
+        if session is not None:
+            write_session_text(
+                session=session,
+                file_name="diff_error.txt",
+                content=str(exc),
+            )
+            update_session_status(session, "diff_failed")
+
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
 @models_app.command("list")
 def list_models() -> None:
     """
@@ -754,8 +871,6 @@ def show_session(
     """
     try:
         if session_id:
-            from trevvos_forge.sessions import get_session
-
             session = get_session(root=path, session_id=session_id)
         else:
             session = get_current_session(path)
@@ -777,6 +892,11 @@ def show_session(
         plan_json_path = session.path / "plan.json"
         plan_raw_response_path = session.path / "plan_raw_response.md"
         plan_path = session.path / "plan.md"
+        diff_prompt_metadata_path = session.path / "diff_prompt_metadata.json"
+        diff_prompt_path = session.path / "diff_prompt.md"
+        diff_raw_response_path = session.path / "diff_raw_response.patch"
+        diff_path = session.path / "diff.patch"
+        diff_error_path = session.path / "diff_error.txt"
 
         if prompt_metadata_path.exists():
             console.print("\n[bold]Prompt metadata[/bold]")
@@ -805,6 +925,26 @@ def show_session(
         if context_path.exists():
             console.print("\n[bold]Context[/bold]")
             console.print(f"Saved at: {context_path}")
+
+        if diff_prompt_metadata_path.exists():
+            console.print("\n[bold]Diff prompt metadata[/bold]")
+            console.print(read_session_text(session, "diff_prompt_metadata.json"))
+
+        if diff_prompt_path.exists():
+            console.print("\n[bold]Diff prompt[/bold]")
+            console.print(f"Saved at: {diff_prompt_path}")
+
+        if diff_raw_response_path.exists():
+            console.print("\n[bold]Raw diff response[/bold]")
+            console.print(f"Saved at: {diff_raw_response_path}")
+
+        if diff_path.exists():
+            console.print("\n[bold]Diff[/bold]")
+            console.print(f"Saved at: {diff_path}")
+
+        if diff_error_path.exists():
+            console.print("\n[bold]Diff error[/bold]")
+            console.print(read_session_text(session, "diff_error.txt"))
 
         console.print("\n[bold]User request[/bold]")
         console.print(user_request)

@@ -40,3 +40,7 @@ class PromptError(ForgeError):
 
 class StructuredOutputError(ForgeError):
     """Raised when an LLM structured output is invalid."""
+
+
+class DiffError(ForgeError):
+    """Raised when diff generation or parsing fails."""

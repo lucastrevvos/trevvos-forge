@@ -7,8 +7,9 @@ from rich.table import Table
 
 from trevvos_forge.context_builder import build_context
 from trevvos_forge.diff_outputs import extract_unified_diff
+from trevvos_forge.diff_validation import validate_diff_patch
 from trevvos_forge.engine import TrevvosForgeEngine
-from trevvos_forge.exceptions import DiffError, ForgeError
+from trevvos_forge.exceptions import DiffError, DiffValidationError, ForgeError
 from trevvos_forge.prompt_catalog import get_prompt, list_prompts
 from trevvos_forge.providers.ollama import OllamaProvider
 from trevvos_forge.sessions import (
@@ -657,25 +658,50 @@ def diff(
             content=unified_diff,
         )
 
-        session = update_session_status(session, "diffed")
+        validation_result = validate_diff_patch(
+            workspace_root=path,
+            session=session,
+            diff_text=unified_diff,
+        )
 
-        console.print("[green]Diff generated.[/green]\n")
+        write_session_json(
+            session=session,
+            file_name="diff_validation.json",
+            data=validation_result.to_dict(),
+        )
+
+        session = update_session_status(session, "diff_validated")
+
+        console.print("[green]Diff generated and validated.[/green]\n")
         console.print(f"Session: {session.metadata.id}")
         console.print(f"Status:  {session.metadata.status}")
         console.print(f"Prompt:  {prompt_template.ref}")
         console.print(f"Model:   {settings.model}")
 
+        console.print("\n[bold]Changes[/bold]")
+        for change in validation_result.changes:
+            action = "CREATE" if change.change_type == "created" else "MODIFY"
+            console.print(f"  - {action} {change.path}")
+
         console.print("\n[bold]Saved files[/bold]")
-        console.print(f"  - {session.path / 'diff_prompt.md'}")
-        console.print(f"  - {session.path / 'diff_prompt_metadata.json'}")
         console.print(f"  - {session.path / 'diff_raw_response.patch'}")
         console.print(f"  - {session.path / 'diff.patch'}")
-
-        console.print("\n[bold]Diff[/bold]\n")
-        console.print(unified_diff)
+        console.print(f"  - {session.path / 'diff_validation.json'}")
 
         console.print("\n[bold]Next[/bold]")
         console.print("  trevvos apply")
+
+    except DiffValidationError as exc:
+        if session is not None:
+            write_session_text(
+                session=session,
+                file_name="diff_validation_error.txt",
+                content=str(exc),
+            )
+            update_session_status(session, "diff_validation_failed")
+
+        print_error(str(exc))
+        raise typer.Exit(code=1)
 
     except ForgeError as exc:
         if session is not None:
@@ -897,6 +923,8 @@ def show_session(
         diff_raw_response_path = session.path / "diff_raw_response.patch"
         diff_path = session.path / "diff.patch"
         diff_error_path = session.path / "diff_error.txt"
+        diff_validation_path = session.path / "diff_validation.json"
+        diff_validation_error_path = session.path / "diff_validation_error.txt"
 
         if prompt_metadata_path.exists():
             console.print("\n[bold]Prompt metadata[/bold]")
@@ -945,6 +973,14 @@ def show_session(
         if diff_error_path.exists():
             console.print("\n[bold]Diff error[/bold]")
             console.print(read_session_text(session, "diff_error.txt"))
+
+        if diff_validation_path.exists():
+            console.print("\n[bold]Diff validation[/bold]")
+            console.print(f"Saved at: {diff_validation_path}")
+
+        if diff_validation_error_path.exists():
+            console.print("\n[bold]Diff validation error[/bold]")
+            console.print(read_session_text(session, "diff_validation_error.txt"))
 
         console.print("\n[bold]User request[/bold]")
         console.print(user_request)

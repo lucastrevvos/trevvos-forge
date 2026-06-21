@@ -44,3 +44,7 @@ class StructuredOutputError(ForgeError):
 
 class DiffError(ForgeError):
     """Raised when diff generation or parsing fails."""
+
+
+class DiffValidationError(DiffError):
+    """Raised when a generated diff fails safety validation."""

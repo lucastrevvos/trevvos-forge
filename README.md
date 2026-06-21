@@ -120,3 +120,16 @@ The diff command saves:
 - `diff_prompt_metadata.json`
 - `diff_raw_response.patch`
 - `diff.patch`
+
+## Diff validation
+
+Generated diffs are validated before apply.
+
+The validation checks:
+
+- unsafe paths;
+- sensitive files;
+- ignored directories;
+- binary patches;
+- deletion attempts;
+- existing files modified outside the selected context.

@@ -8,10 +8,17 @@ from rich.table import Table
 
 from trevvos_forge.apply_patch import apply_patch, check_patch
 from trevvos_forge.context_builder import build_context
-from trevvos_forge.diff_outputs import extract_unified_diff
+from trevvos_forge.diff_builder import build_unified_diff_from_file_changes
 from trevvos_forge.diff_validation import validate_diff_patch
 from trevvos_forge.engine import TrevvosForgeEngine
-from trevvos_forge.exceptions import ApplyError, DiffError, DiffValidationError, ForgeError
+from trevvos_forge.exceptions import (
+    ApplyError,
+    DiffError,
+    DiffValidationError,
+    FileChangeOutputError,
+    ForgeError,
+)
+from trevvos_forge.file_change_outputs import parse_file_changes_output
 from trevvos_forge.prompt_catalog import get_prompt, list_prompts
 from trevvos_forge.providers.ollama import OllamaProvider
 from trevvos_forge.sessions import (
@@ -114,6 +121,14 @@ def _load_diff_validation_changes(session_path: Path) -> list[dict]:
 
 def _format_change_action(change_type: object) -> str:
     return "CREATE" if change_type == "created" else "MODIFY"
+
+
+def _delete_session_files(session_path: Path, file_names: list[str]) -> None:
+    for file_name in file_names:
+        file_path = session_path / file_name
+
+        if file_path.exists():
+            file_path.unlink()
 
 
 @app.command()
@@ -640,7 +655,7 @@ def diff(
         workspace_context = read_session_text(session, "context.md")
         plan_markdown = read_session_text(session, "plan.md")
 
-        prompt_template = get_prompt("diff_generation")
+        prompt_template = get_prompt("file_changes_generation")
 
         prompt = prompt_template.render(
             instruction=instruction,
@@ -667,16 +682,27 @@ def diff(
             },
         )
 
-        with console.status("[bold]Generating diff with your local LLM...[/bold]", spinner="dots"):
-            raw_diff_response = provider.generate(prompt)
+        with console.status("[bold]Generating file changes with your local LLM...[/bold]", spinner="dots"):
+            raw_file_changes_response = provider.generate(prompt)
 
         write_session_text(
             session=session,
-            file_name="diff_raw_response.patch",
-            content=raw_diff_response,
+            file_name="file_changes_raw_response.json",
+            content=raw_file_changes_response,
         )
 
-        unified_diff = extract_unified_diff(raw_diff_response)
+        file_changes = parse_file_changes_output(raw_file_changes_response)
+
+        write_session_json(
+            session=session,
+            file_name="file_changes.json",
+            data=file_changes.to_dict(),
+        )
+
+        unified_diff = build_unified_diff_from_file_changes(
+            workspace_root=workspace_root,
+            file_changes=file_changes,
+        )
 
         write_session_text(
             session=session,
@@ -707,9 +733,19 @@ def diff(
             },
         )
 
+        _delete_session_files(
+            session.path,
+            [
+                "file_changes_error.txt",
+                "diff_error.txt",
+                "diff_validation_error.txt",
+                "diff_check_error.txt",
+            ],
+        )
+
         session = update_session_status(session, "diff_validated")
 
-        console.print("[green]Diff generated, safe, and applicable.[/green]\n")
+        console.print("[green]Diff generated deterministically, safe, and applicable.[/green]\n")
         console.print(f"Session: {session.metadata.id}")
         console.print(f"Status:  {session.metadata.status}")
         console.print(f"Prompt:  {prompt_template.ref}")
@@ -721,13 +757,26 @@ def diff(
             console.print(f"  - {action} {change.path}")
 
         console.print("\n[bold]Saved files[/bold]")
-        console.print(f"  - {session.path / 'diff_raw_response.patch'}")
+        console.print(f"  - {session.path / 'file_changes_raw_response.json'}")
+        console.print(f"  - {session.path / 'file_changes.json'}")
         console.print(f"  - {session.path / 'diff.patch'}")
         console.print(f"  - {session.path / 'diff_validation.json'}")
         console.print(f"  - {session.path / 'diff_check.json'}")
 
         console.print("\n[bold]Next[/bold]")
         console.print("  trevvos apply")
+
+    except FileChangeOutputError as exc:
+        if session is not None:
+            write_session_text(
+                session=session,
+                file_name="file_changes_error.txt",
+                content=str(exc),
+            )
+            update_session_status(session, "diff_generation_failed")
+
+        print_error(str(exc))
+        raise typer.Exit(code=1)
 
     except DiffValidationError as exc:
         if session is not None:
@@ -765,7 +814,7 @@ def diff(
                 file_name="diff_error.txt",
                 content=str(exc),
             )
-            update_session_status(session, "diff_failed")
+            update_session_status(session, "diff_generation_failed")
 
         print_error(str(exc))
         raise typer.Exit(code=1)
@@ -1068,6 +1117,9 @@ def show_session(
         plan_path = session.path / "plan.md"
         diff_prompt_metadata_path = session.path / "diff_prompt_metadata.json"
         diff_prompt_path = session.path / "diff_prompt.md"
+        file_changes_raw_response_path = session.path / "file_changes_raw_response.json"
+        file_changes_path = session.path / "file_changes.json"
+        file_changes_error_path = session.path / "file_changes_error.txt"
         diff_raw_response_path = session.path / "diff_raw_response.patch"
         diff_path = session.path / "diff.patch"
         diff_error_path = session.path / "diff_error.txt"
@@ -1113,6 +1165,18 @@ def show_session(
         if diff_prompt_path.exists():
             console.print("\n[bold]Diff prompt[/bold]")
             console.print(f"Saved at: {diff_prompt_path}")
+
+        if file_changes_raw_response_path.exists():
+            console.print("\n[bold]Raw file changes response[/bold]")
+            console.print(f"Saved at: {file_changes_raw_response_path}")
+
+        if file_changes_path.exists():
+            console.print("\n[bold]File changes[/bold]")
+            console.print(f"Saved at: {file_changes_path}")
+
+        if file_changes_error_path.exists():
+            console.print("\n[bold]File changes error[/bold]")
+            console.print(read_session_text(session, "file_changes_error.txt"))
 
         if diff_raw_response_path.exists():
             console.print("\n[bold]Raw diff response[/bold]")

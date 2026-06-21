@@ -5,7 +5,7 @@ from rich.console import Console
 from pathlib import Path
 from rich.table import Table
 
-
+from trevvos_forge.prompt_catalog import get_prompt, list_prompts
 from trevvos_forge.engine import TrevvosForgeEngine
 from trevvos_forge.exceptions import ForgeError
 from trevvos_forge.providers.ollama import OllamaProvider
@@ -42,8 +42,14 @@ sessions_app = typer.Typer(
     no_args_is_help=True,
 )
 
-app.add_typer(sessions_app, name="sessions")
+prompts_app = typer.Typer(
+    name="prompts",
+    help="Inspect Trevvos Forge prompt catalog.",
+    no_args_is_help=True,
+)
 
+app.add_typer(sessions_app, name="sessions")
+app.add_typer(prompts_app, name="prompts")
 app.add_typer(models_app, name="models")
 
 console = Console()
@@ -596,6 +602,49 @@ def clean_local_sessions(
     try:
         clean_sessions(path)
         console.print("[green]Local sessions cleaned.[/green]")
+
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+@prompts_app.command("list")
+def list_prompt_catalog() -> None:
+    """
+    List available versioned prompts.
+    """
+    table = Table(title="Trevvos Forge Prompts")
+    table.add_column("Name")
+    table.add_column("Version")
+    table.add_column("Reference")
+    table.add_column("Description", overflow="fold")
+
+    for prompt in list_prompts():
+        table.add_row(
+            prompt.name,
+            prompt.version,
+            prompt.ref,
+            prompt.description,
+        )
+
+    console.print(table)
+
+
+@prompts_app.command("show")
+def show_prompt(name: str) -> None:
+    """
+    Show a prompt template by name.
+    """
+    try:
+        prompt = get_prompt(name)
+
+        console.print("[bold]Prompt[/bold]\n")
+        console.print(f"Name:        {prompt.name}")
+        console.print(f"Version:     {prompt.version}")
+        console.print(f"Reference:   {prompt.ref}")
+        console.print(f"Description: {prompt.description}")
+
+        console.print("\n[bold]Template[/bold]\n")
+        console.print(prompt.template.strip())
 
     except ForgeError as exc:
         print_error(str(exc))

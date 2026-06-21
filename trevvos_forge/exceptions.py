@@ -31,3 +31,6 @@ class WorkspaceError(ForgeError):
 
 class SessionError(ForgeError):
     """Raised when session management fails."""
+
+class PromptError(ForgeError):
+    """Raised when prompt rendering or prompt lookup fails."""

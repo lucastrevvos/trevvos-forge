@@ -71,3 +71,13 @@ trevvos plan "add JWT authentication to this project"
 
 trevvos plan "improve this project structure" --path ./my-project
 ```
+
+## Prompts
+
+List versioned prompts:
+
+```bash
+trevvos prompts list
+
+trevvos prompts show plan_change
+```

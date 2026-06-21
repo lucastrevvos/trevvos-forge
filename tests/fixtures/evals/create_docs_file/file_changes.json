@@ -1,0 +1,11 @@
+{
+  "changes": [
+    {
+      "path": "docs/usage.md",
+      "change_type": "created",
+      "mode": "operation_based_edit",
+      "operation": "create_file",
+      "content": "# Usage\n\nHello.\n"
+    }
+  ]
+}

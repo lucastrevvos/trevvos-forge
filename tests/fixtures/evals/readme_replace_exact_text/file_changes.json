@@ -1,0 +1,12 @@
+{
+  "changes": [
+    {
+      "path": "README.md",
+      "change_type": "modified",
+      "mode": "operation_based_edit",
+      "operation": "replace_exact_text",
+      "target": "local AI-assisted engineering",
+      "replacement": "local-first AI engineering"
+    }
+  ]
+}

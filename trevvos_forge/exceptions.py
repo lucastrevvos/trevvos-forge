@@ -48,3 +48,7 @@ class DiffError(ForgeError):
 
 class DiffValidationError(DiffError):
     """Raised when a generated diff fails safety validation."""
+
+
+class ApplyError(ForgeError):
+    """Raised when applying a validated diff fails."""

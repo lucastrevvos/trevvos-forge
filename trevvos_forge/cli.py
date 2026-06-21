@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Annotated
 
@@ -5,11 +6,12 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from trevvos_forge.apply_patch import apply_patch, check_patch
 from trevvos_forge.context_builder import build_context
 from trevvos_forge.diff_outputs import extract_unified_diff
 from trevvos_forge.diff_validation import validate_diff_patch
 from trevvos_forge.engine import TrevvosForgeEngine
-from trevvos_forge.exceptions import DiffError, DiffValidationError, ForgeError
+from trevvos_forge.exceptions import ApplyError, DiffError, DiffValidationError, ForgeError
 from trevvos_forge.prompt_catalog import get_prompt, list_prompts
 from trevvos_forge.providers.ollama import OllamaProvider
 from trevvos_forge.sessions import (
@@ -89,6 +91,29 @@ def build_engine() -> TrevvosForgeEngine:
     provider = build_provider(settings)
 
     return TrevvosForgeEngine(provider=provider)
+
+
+def _load_diff_validation_changes(session_path: Path) -> list[dict]:
+    validation_path = session_path / "diff_validation.json"
+
+    if not validation_path.exists():
+        raise ApplyError("Cannot apply: diff_validation.json not found in session.")
+
+    try:
+        validation = json.loads(validation_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ApplyError("Cannot apply: diff_validation.json is invalid JSON.") from exc
+
+    changes = validation.get("changes")
+
+    if not isinstance(changes, list):
+        raise ApplyError("Cannot apply: diff_validation.json has no changes list.")
+
+    return changes
+
+
+def _format_change_action(change_type: object) -> str:
+    return "CREATE" if change_type == "created" else "MODIFY"
 
 
 @app.command()
@@ -716,6 +741,99 @@ def diff(
         raise typer.Exit(code=1)
 
 
+@app.command()
+def apply(
+    session_id: Annotated[
+        str | None,
+        typer.Option("--session", "-s", help="Session ID to use. Defaults to current session."),
+    ] = None,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Apply without interactive confirmation."),
+    ] = False,
+) -> None:
+    """
+    Apply a validated diff patch to the workspace.
+    """
+    session = None
+
+    try:
+        workspace_root = path.resolve()
+
+        if session_id:
+            session = get_session(root=workspace_root, session_id=session_id)
+        else:
+            session = get_current_session(workspace_root)
+
+        if session.metadata.status != "diff_validated":
+            raise ApplyError(
+                "Cannot apply: session status must be diff_validated. "
+                f"Current status: {session.metadata.status}."
+            )
+
+        patch_path = session.path / "diff.patch"
+
+        if not patch_path.exists():
+            raise ApplyError("Cannot apply: diff.patch not found in session.")
+
+        changes = _load_diff_validation_changes(session.path)
+
+        console.print("[green]Patch ready to apply.[/green]\n")
+        console.print(f"Session: {session.metadata.id}")
+        console.print(f"Status:  {session.metadata.status}")
+
+        console.print("\n[bold]Changes[/bold]")
+        for change in changes:
+            if not isinstance(change, dict):
+                continue
+
+            path_value = change.get("path")
+            change_type = change.get("change_type")
+
+            if isinstance(path_value, str):
+                console.print(f"  - {_format_change_action(change_type)} {path_value}")
+
+        check_patch(workspace_root=workspace_root, session=session)
+        console.print("\nGit check: [green]OK[/green]")
+
+        if not yes and not typer.confirm("Apply this patch?", default=False):
+            console.print("[yellow]Cancelled.[/yellow]")
+            return
+
+        result = apply_patch(workspace_root=workspace_root, session=session)
+
+        write_session_json(
+            session=session,
+            file_name="apply_result.json",
+            data=result.to_dict(),
+        )
+
+        session = update_session_status(session, "applied")
+
+        console.print("\n[green]Patch applied successfully.[/green]\n")
+        console.print(f"Session: {session.metadata.id}")
+        console.print(f"Status:  {session.metadata.status}")
+
+        console.print("\n[bold]Saved files[/bold]")
+        console.print(f"  - {session.path / 'apply_result.json'}")
+
+    except ForgeError as exc:
+        if session is not None:
+            write_session_text(
+                session=session,
+                file_name="apply_error.txt",
+                content=str(exc),
+            )
+            update_session_status(session, "apply_failed")
+
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
 @models_app.command("list")
 def list_models() -> None:
     """
@@ -925,6 +1043,8 @@ def show_session(
         diff_error_path = session.path / "diff_error.txt"
         diff_validation_path = session.path / "diff_validation.json"
         diff_validation_error_path = session.path / "diff_validation_error.txt"
+        apply_result_path = session.path / "apply_result.json"
+        apply_error_path = session.path / "apply_error.txt"
 
         if prompt_metadata_path.exists():
             console.print("\n[bold]Prompt metadata[/bold]")
@@ -981,6 +1101,14 @@ def show_session(
         if diff_validation_error_path.exists():
             console.print("\n[bold]Diff validation error[/bold]")
             console.print(read_session_text(session, "diff_validation_error.txt"))
+
+        if apply_result_path.exists():
+            console.print("\n[bold]Apply result[/bold]")
+            console.print(f"Saved at: {apply_result_path}")
+
+        if apply_error_path.exists():
+            console.print("\n[bold]Apply error[/bold]")
+            console.print(read_session_text(session, "apply_error.txt"))
 
         console.print("\n[bold]User request[/bold]")
         console.print(user_request)

@@ -133,3 +133,25 @@ The validation checks:
 - binary patches;
 - deletion attempts;
 - existing files modified outside the selected context.
+
+## Apply
+
+Apply a validated diff:
+
+```bash
+trevvos apply
+```
+
+Apply a specific session:
+
+```bash
+trevvos apply --session <session-id>
+```
+
+Skip interactive confirmation:
+
+```bash
+trevvos apply --yes
+```
+
+Apply only works when the session status is `diff_validated`.

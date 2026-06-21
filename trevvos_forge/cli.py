@@ -21,6 +21,11 @@ from trevvos_forge.exceptions import (
 from trevvos_forge.file_change_outputs import parse_file_changes_output
 from trevvos_forge.prompt_catalog import get_prompt, list_prompts
 from trevvos_forge.providers.ollama import OllamaProvider
+from trevvos_forge.review_artifacts import (
+    build_change_summary_markdown,
+    build_patch_preview,
+    build_semantic_review_json,
+)
 from trevvos_forge.sessions import (
     clean_sessions,
     create_session,
@@ -119,8 +124,66 @@ def _load_diff_validation_changes(session_path: Path) -> list[dict]:
     return changes
 
 
+def _load_session_json(session_path: Path, file_name: str) -> dict:
+    file_path = session_path / file_name
+
+    if not file_path.exists():
+        raise ApplyError(f"Cannot apply: {file_name} not found in session.")
+
+    try:
+        value = json.loads(file_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ApplyError(f"Cannot apply: {file_name} is invalid JSON.") from exc
+
+    if not isinstance(value, dict):
+        raise ApplyError(f"Cannot apply: {file_name} must contain a JSON object.")
+
+    return value
+
+
+def _load_diff_warnings(session_path: Path) -> list[str]:
+    warnings_path = session_path / "diff_warnings.json"
+
+    if not warnings_path.exists():
+        return []
+
+    try:
+        payload = json.loads(warnings_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return ["Unable to read diff_warnings.json."]
+
+    warnings = payload.get("warnings") if isinstance(payload, dict) else None
+
+    if not isinstance(warnings, list):
+        return ["diff_warnings.json has an invalid warnings field."]
+
+    return [warning for warning in warnings if isinstance(warning, str)]
+
+
 def _format_change_action(change_type: object) -> str:
     return "CREATE" if change_type == "created" else "MODIFY"
+
+
+def _format_change_line(change: dict) -> str:
+    path = change.get("path")
+    change_type = change.get("change_type")
+    mode = change.get("mode")
+    operation = change.get("operation")
+
+    if not isinstance(path, str):
+        return ""
+
+    descriptor = ""
+
+    if isinstance(mode, str):
+        descriptor = mode
+
+        if isinstance(operation, str):
+            descriptor = f"{descriptor} / {operation}"
+
+    suffix = f" {descriptor}" if descriptor else ""
+
+    return f"- {path} [{change_type}]{suffix}"
 
 
 def _delete_session_files(session_path: Path, file_names: list[str]) -> None:
@@ -744,6 +807,29 @@ def diff(
             },
         )
 
+        change_summary = build_change_summary_markdown(
+            request=instruction,
+            file_changes=file_changes,
+            warnings=diff_warnings,
+        )
+        semantic_review = build_semantic_review_json(
+            request=instruction,
+            file_changes=file_changes,
+            warnings=diff_warnings,
+        )
+
+        write_session_text(
+            session=session,
+            file_name="change_summary.md",
+            content=change_summary,
+        )
+
+        write_session_json(
+            session=session,
+            file_name="semantic_review.json",
+            data=semantic_review,
+        )
+
         _delete_session_files(
             session.path,
             [
@@ -756,21 +842,36 @@ def diff(
 
         session = update_session_status(session, "diff_validated")
 
-        console.print("[green]Diff generated deterministically, safe, and applicable.[/green]\n")
+        console.print("[green]Diff generated successfully.[/green]\n")
         console.print(f"Session: {session.metadata.id}")
         console.print(f"Status:  {session.metadata.status}")
         console.print(f"Prompt:  {prompt_template.ref}")
         console.print(f"Model:   {settings.model}")
 
-        console.print("\n[bold]Changes[/bold]")
-        for change in validation_result.changes:
-            action = "CREATE" if change.change_type == "created" else "MODIFY"
-            console.print(f"  - {action} {change.path}")
+        console.print("\n[bold]Files changed[/bold]")
+        for change in file_changes.changes:
+            descriptor = change.mode
 
+            if change.operation:
+                descriptor = f"{descriptor} / {change.operation}"
+
+            console.print(f"  - {change.path} [{change.change_type}] {descriptor}")
+
+        console.print("\n[bold]Artifacts[/bold]")
+        console.print(f"  - diff.patch: {session.path / 'diff.patch'}")
+        console.print(f"  - change_summary.md: {session.path / 'change_summary.md'}")
+        console.print(f"  - semantic_review.json: {session.path / 'semantic_review.json'}")
+
+        console.print("\n[bold]Validations[/bold]")
+        console.print("  - Forge safety validation: passed")
+        console.print("  - git apply --check: passed")
+
+        console.print("\n[bold]Warnings[/bold]")
         if diff_warnings:
-            console.print("\n[bold yellow]Warnings[/bold yellow]")
             for warning in diff_warnings:
-                console.print(f"  - {warning}")
+                console.print(f"  - [yellow]{warning}[/yellow]")
+        else:
+            console.print("  - None")
 
         console.print("\n[bold]Saved files[/bold]")
         console.print(f"  - {session.path / 'file_changes_raw_response.json'}")
@@ -780,13 +881,11 @@ def diff(
             console.print(f"  - {session.path / 'diff_warnings.json'}")
         console.print(f"  - {session.path / 'diff_validation.json'}")
         console.print(f"  - {session.path / 'diff_check.json'}")
-
-        console.print("\n[bold]Validation[/bold]")
-        console.print("  - Trevvos safety validation: OK")
-        console.print("  - git apply --check: OK")
+        console.print(f"  - {session.path / 'change_summary.md'}")
+        console.print(f"  - {session.path / 'semantic_review.json'}")
 
         console.print("\n[bold]Next[/bold]")
-        console.print("  trevvos apply")
+        console.print("  Run `trevvos apply` to review and apply the patch.")
 
     except FileChangeOutputError as exc:
         if session is not None:
@@ -881,34 +980,53 @@ def apply(
         if not patch_path.exists():
             raise ApplyError("Cannot apply: diff.patch not found in session.")
 
-        changes = _load_diff_validation_changes(session.path)
+        validation_changes = _load_diff_validation_changes(session.path)
+        file_changes_payload = _load_session_json(session.path, "file_changes.json")
+        file_changes_for_display = file_changes_payload.get("changes")
 
-        console.print("[green]Patch ready to apply.[/green]\n")
-        console.print(f"Session: {session.metadata.id}")
-        console.print(f"Status:  {session.metadata.status}")
-        console.print(f"Patch:   {patch_path}")
+        if not isinstance(file_changes_for_display, list):
+            file_changes_for_display = validation_changes
 
-        console.print("\n[bold]Changes[/bold]")
-        for change in changes:
+        console.print(f"[green]About to apply session:[/green] {session.metadata.id}\n")
+        console.print(f"Status: {session.metadata.status}")
+
+        console.print("\n[bold]Files changed[/bold]")
+        for change in file_changes_for_display:
             if not isinstance(change, dict):
                 continue
 
-            path_value = change.get("path")
-            change_type = change.get("change_type")
+            line = _format_change_line(change)
 
-            if isinstance(path_value, str):
-                console.print(f"  - {_format_change_action(change_type)} {path_value}")
+            if line:
+                console.print(f"  {line}")
 
-        warnings_path = session.path / "diff_warnings.json"
+        warnings = _load_diff_warnings(session.path)
 
-        if warnings_path.exists():
-            console.print("\n[bold yellow]Warnings[/bold yellow]")
-            console.print(read_session_text(session, "diff_warnings.json"))
-
-        console.print("\nValidation")
-        console.print("  - Trevvos safety validation: OK")
+        console.print("\n[bold]Validations[/bold]")
+        console.print("  - Forge safety validation: passed")
         check_patch(workspace_root=workspace_root, session=session)
-        console.print("  - git apply --check: [green]OK[/green]")
+        console.print("  - git apply --check: passed")
+
+        console.print("\n[bold]Warnings[/bold]")
+        if warnings:
+            for warning in warnings:
+                console.print(f"  - [yellow]{warning}[/yellow]")
+        else:
+            console.print("  - None")
+
+        console.print("\n[bold]Patch[/bold]")
+        console.print(f"  {patch_path}")
+
+        patch_preview, preview_truncated = build_patch_preview(
+            patch_path.read_text(encoding="utf-8"),
+            max_lines=80,
+        )
+
+        console.print("\n[bold]Patch preview[/bold]")
+        console.print(patch_preview)
+
+        if preview_truncated:
+            console.print(f"\n[yellow]Preview truncated. Full patch available at {patch_path}[/yellow]")
 
         if not yes and not typer.confirm("Apply this patch?", default=False):
             console.print("[yellow]Cancelled.[/yellow]")
@@ -1159,6 +1277,8 @@ def show_session(
         diff_validation_error_path = session.path / "diff_validation_error.txt"
         diff_check_path = session.path / "diff_check.json"
         diff_check_error_path = session.path / "diff_check_error.txt"
+        change_summary_path = session.path / "change_summary.md"
+        semantic_review_path = session.path / "semantic_review.json"
         apply_result_path = session.path / "apply_result.json"
         apply_error_path = session.path / "apply_error.txt"
 
@@ -1241,6 +1361,14 @@ def show_session(
         if diff_check_error_path.exists():
             console.print("\n[bold]Diff git check error[/bold]")
             console.print(read_session_text(session, "diff_check_error.txt"))
+
+        if change_summary_path.exists():
+            console.print("\n[bold]Change summary[/bold]")
+            console.print(f"Saved at: {change_summary_path}")
+
+        if semantic_review_path.exists():
+            console.print("\n[bold]Semantic review[/bold]")
+            console.print(f"Saved at: {semantic_review_path}")
 
         if apply_result_path.exists():
             console.print("\n[bold]Apply result[/bold]")

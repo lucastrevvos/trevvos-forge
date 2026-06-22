@@ -31,6 +31,7 @@ from trevvos_forge.exceptions import (
     TestRunError,
 )
 from trevvos_forge.file_change_outputs import parse_file_changes_output
+from trevvos_forge.operation_error_artifacts import write_operation_error_artifacts
 from trevvos_forge.prompt_catalog import get_prompt, list_prompts
 from trevvos_forge.providers.ollama import OllamaProvider
 from trevvos_forge.review_artifacts import (
@@ -912,6 +913,8 @@ def diff(
             [
                 "file_changes_error.txt",
                 "diff_error.txt",
+                "operation_error.json",
+                "operation_error.md",
                 "diff_validation_error.txt",
                 "diff_check_error.txt",
             ],
@@ -1012,9 +1015,14 @@ def diff(
                 file_name="diff_error.txt",
                 content=str(exc),
             )
+            write_operation_error_artifacts(session, str(exc))
             update_session_status(session, "diff_generation_failed")
 
         print_error(str(exc))
+        if session is not None:
+            console.print("\n[bold]Operation error artifacts[/bold]")
+            console.print(f"  - {session.path / 'operation_error.json'}")
+            console.print(f"  - {session.path / 'operation_error.md'}")
         raise typer.Exit(code=1)
 
 
@@ -1877,6 +1885,8 @@ def show_session(
         diff_path = session.path / "diff.patch"
         diff_warnings_path = session.path / "diff_warnings.json"
         diff_error_path = session.path / "diff_error.txt"
+        operation_error_json_path = session.path / "operation_error.json"
+        operation_error_markdown_path = session.path / "operation_error.md"
         diff_validation_path = session.path / "diff_validation.json"
         diff_validation_error_path = session.path / "diff_validation_error.txt"
         diff_check_path = session.path / "diff_check.json"
@@ -1960,6 +1970,14 @@ def show_session(
         if diff_error_path.exists():
             console.print("\n[bold]Diff error[/bold]")
             console.print(read_session_text(session, "diff_error.txt"))
+
+        if operation_error_json_path.exists():
+            console.print("\n[bold]Operation error[/bold]")
+            console.print(f"Saved at: {operation_error_json_path}")
+
+        if operation_error_markdown_path.exists():
+            console.print("\n[bold]Operation error details[/bold]")
+            console.print(f"Saved at: {operation_error_markdown_path}")
 
         if diff_validation_path.exists():
             console.print("\n[bold]Diff validation[/bold]")

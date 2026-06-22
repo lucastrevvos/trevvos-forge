@@ -719,6 +719,9 @@ Rules:
 - Never modify production source files.
 - Do not remove or rewrite existing tests.
 - Do not duplicate tests that already exist.
+- Use the Existing tests analysis section to avoid duplicate tests.
+- Generate tests only for the requested missing symbols unless force is true.
+- If existing tests already cover a symbol, only add complementary edge cases when explicitly forced.
 - In Mode: all_symbols, generate tests for every listed symbol.
 - In Mode: all_symbols, do not skip a listed symbol unless there is a clear reason; if skipped, explain why in the test generation summary content when possible.
 - If adding to an existing test file, append new tests or insert in a clearly safe location.

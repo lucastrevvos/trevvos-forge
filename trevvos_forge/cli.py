@@ -121,12 +121,14 @@ from trevvos_forge.test_runner import (
 )
 from trevvos_forge.test_generation import (
     build_selected_files_payload,
+    build_existing_tests_check,
     build_test_generation_context,
     build_test_generation_summary,
     build_test_generation_target,
     metadata_for_target,
     raw_response_json,
     select_test_generation_commands,
+    target_with_symbols,
     validate_file_changes_are_tests_only,
 )
 from trevvos_forge.timeline import append_timeline_event, write_timeline_markdown
@@ -3736,6 +3738,10 @@ def tests_add(
         bool,
         typer.Option("--write", help="Apply the generated test patch after validation and confirmation."),
     ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Generate tests even when existing tests appear to cover the symbol(s)."),
+    ] = False,
     timeout: Annotated[
         int,
         typer.Option("--timeout", help="Timeout per sandbox test command in seconds."),
@@ -3796,7 +3802,6 @@ def tests_add(
         _record_timeline_event(session, "tests_add_started", command_text, "started")
 
         settings = load_settings()
-        provider = build_provider(settings)
         prompt_template = get_prompt("test_generation")
 
         source_content = read_workspace_file(workspace_root, Path(target.source_path), max_chars=20_000)
@@ -3806,11 +3811,77 @@ def tests_add(
             if test_path.exists()
             else None
         )
+        original_symbols = [symbol.name for symbol in target.symbols]
+        existing_tests_check = build_existing_tests_check(
+            target=target,
+            test_file_content=test_content,
+        )
+        write_session_json(session, "existing_tests_check.json", existing_tests_check.to_dict())
+
+        if not force and existing_tests_check.status == "all_covered":
+            metadata = metadata_for_target(
+                target=target,
+                write=write,
+                prompt_ref=prompt_template.ref,
+                status="skipped_existing_tests",
+                files_changed=[],
+                existing_tests_check=existing_tests_check,
+                symbols_original=original_symbols,
+                provider_called=False,
+                write_allowed=False,
+            )
+            write_session_json(session, "test_generation_metadata.json", metadata)
+            write_session_text(
+                session,
+                "test_generation_summary.md",
+                build_test_generation_summary(
+                    target=target,
+                    files_changed=[],
+                    write=write,
+                    status="skipped_existing_tests",
+                    existing_tests_check=existing_tests_check,
+                ),
+            )
+            session = update_session_status(session, "skipped_existing_tests")
+            _record_timeline_event(
+                session,
+                "tests_add_existing_tests_skipped",
+                command_text,
+                "skipped",
+                artifacts=["existing_tests_check.json", "test_generation_metadata.json", "test_generation_summary.md"],
+                existing_tests_status=existing_tests_check.status,
+                provider_called=False,
+            )
+            if json_output:
+                console.print(json.dumps({**metadata, "session_id": session.metadata.id}, indent=2))
+                return
+            if target.all_symbols:
+                console.print("[yellow]All detected symbols already appear to have tests.[/yellow]")
+                console.print("No new test patch was generated.\n")
+            else:
+                console.print(f"[yellow]Existing tests appear to cover `{target.symbol.name}`.[/yellow]")
+                console.print("No new test patch was generated.\n")
+            console.print("Use --force to generate additional tests anyway.")
+            console.print("\n[bold]Artifacts[/bold]")
+            console.print(f"  - {session.path / 'existing_tests_check.json'}")
+            console.print(f"  - {session.path / 'test_generation_metadata.json'}")
+            console.print(f"  - {session.path / 'test_generation_summary.md'}")
+            return
+
+        if not force and target.all_symbols and existing_tests_check.status == "partial":
+            missing_names = set(existing_tests_check.symbols_missing)
+            target = target_with_symbols(
+                target,
+                [symbol for symbol in target.symbols if symbol.name in missing_names],
+            )
+
         prompt_context = build_test_generation_context(
             workspace_root=workspace_root,
             target=target,
             source_content=content_with_line_numbers(source_content),
             test_content=content_with_line_numbers(test_content) if test_content is not None else None,
+            existing_tests_check=existing_tests_check,
+            force=force,
         )
         prompt = prompt_template.render(test_generation_context=prompt_context)
 
@@ -3824,6 +3895,7 @@ def tests_add(
             ),
         )
 
+        provider = build_provider(settings)
         with console.status("[bold]Generating test file changes with your local LLM...[/bold]", spinner="dots"):
             raw_response = provider.generate(prompt)
 
@@ -3929,6 +4001,9 @@ def tests_add(
             sandbox_commands=test_commands,
             sandbox_command_source=command_source,
             symbol_selector=symbol_selector,
+            existing_tests_check=existing_tests_check,
+            symbols_original=original_symbols,
+            provider_called=True,
             write_allowed=write_allowed,
         )
         write_session_json(session, "test_generation_metadata.json", metadata)
@@ -3940,6 +4015,7 @@ def tests_add(
                 files_changed=files_changed,
                 write=write,
                 status="diff_ready",
+                existing_tests_check=existing_tests_check,
             ),
         )
 
@@ -3949,6 +4025,7 @@ def tests_add(
             command_text,
             "succeeded",
             artifacts=[
+                "existing_tests_check.json",
                 "test_generation_prompt.md",
                 "test_generation_raw_response.json",
                 "test_file_changes.json",
@@ -3981,6 +4058,7 @@ def tests_add(
             for changed_path in files_changed:
                 console.print(f"  - {changed_path}")
             console.print("\n[bold]Artifacts[/bold]")
+            console.print(f"  - {session.path / 'existing_tests_check.json'}")
             console.print(f"  - {session.path / 'test_diff.patch'}")
             console.print(f"  - {session.path / 'test_file_changes.json'}")
             console.print(f"  - {session.path / 'test_sandbox_results.json'}")

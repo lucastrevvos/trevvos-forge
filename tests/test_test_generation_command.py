@@ -14,6 +14,7 @@ from trevvos_forge.test_generation import (
     TEST_FILE_ERROR,
     SymbolInfo,
     build_test_generation_target,
+    detect_existing_tests_for_symbols,
     detect_testable_python_symbols,
     select_test_generation_commands,
     validate_test_file_path,
@@ -22,6 +23,32 @@ from trevvos_forge.timeline import read_timeline
 
 
 class TestsAddCommandTests(unittest.TestCase):
+    def test_detects_existing_test_by_name(self) -> None:
+        check = detect_existing_tests_for_symbols(
+            test_file_content="def test_divide_by_zero():\n    assert True\n",
+            symbols=["divide"],
+        )
+
+        self.assertTrue(check["divide"]["covered"])
+        self.assertIn("test_divide_by_zero", check["divide"]["evidence"])
+
+    def test_detects_existing_test_by_call_body(self) -> None:
+        check = detect_existing_tests_for_symbols(
+            test_file_content="def test_zero_division():\n    divide(1, 0)\n",
+            symbols=["divide"],
+        )
+
+        self.assertTrue(check["divide"]["covered"])
+        self.assertIn("calls divide", check["divide"]["evidence"])
+
+    def test_missing_existing_test_is_not_covered(self) -> None:
+        check = detect_existing_tests_for_symbols(
+            test_file_content="def test_add():\n    add(1, 2)\n",
+            symbols=["multiply"],
+        )
+
+        self.assertFalse(check["multiply"]["covered"])
+
     def test_all_detects_public_functions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = _sample_repo(Path(temporary_directory))
@@ -165,6 +192,185 @@ class TestsAddCommandTests(unittest.TestCase):
             self.assertTrue(metadata["all"])
             self.assertIsNone(metadata["symbol"])
             self.assertEqual(metadata["symbols"], ["add", "subtract", "multiply", "divide"])
+
+    def test_symbol_existing_test_skips_provider(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            tests_dir = root / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_calculator.py").write_text(
+                "from calculator import divide\n\n"
+                "def test_divide_by_zero():\n"
+                "    divide(1, 1)\n",
+                encoding="utf-8",
+            )
+
+            with patch("trevvos_forge.cli.build_provider") as build_provider:
+                result = runner.invoke(app, ["tests", "add", "calculator.py", "--symbol", "divide", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            build_provider.assert_not_called()
+            session_dir = _only_session(root)
+            metadata = _read_json(session_dir / "test_generation_metadata.json")
+            existing = _read_json(session_dir / "existing_tests_check.json")
+
+            self.assertEqual(metadata["status"], "skipped_existing_tests")
+            self.assertFalse(metadata["provider_called"])
+            self.assertEqual(existing["status"], "all_covered")
+            self.assertFalse((session_dir / "test_diff.patch").exists())
+
+    def test_symbol_force_calls_provider_with_existing_tests_context(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            tests_dir = root / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_calculator.py").write_text(
+                "from calculator import divide\n\n"
+                "def test_divide_by_zero():\n"
+                "    divide(1, 1)\n",
+                encoding="utf-8",
+            )
+            provider = _FakeProvider(
+                json.dumps(
+                    {
+                        "changes": [
+                            {
+                                "path": "tests/test_calculator.py",
+                                "change_type": "modified",
+                                "mode": "operation_based_edit",
+                                "operation": "append_to_file",
+                                "insert": "\n\ndef test_divide_negative_values():\n    assert divide(-4, 2) == -2\n",
+                            }
+                        ]
+                    }
+                )
+            )
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(
+                    app,
+                    ["tests", "add", "calculator.py", "--symbol", "divide", "--force", "--path", str(root)],
+                )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("Existing tests analysis:", provider.prompt)
+            self.assertIn("Some or all symbols may already have tests", provider.prompt)
+            metadata = _read_json(_only_session(root) / "test_generation_metadata.json")
+            self.assertTrue(metadata["provider_called"])
+
+    def test_all_partial_generates_only_missing_symbols(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            tests_dir = root / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_calculator.py").write_text(
+                "from calculator import add, divide\n\n"
+                "def test_add_returns_sum():\n"
+                "    add(1, 2)\n\n"
+                "def test_divide_by_zero():\n"
+                "    divide(1, 1)\n",
+                encoding="utf-8",
+            )
+            provider = _FakeProvider(
+                json.dumps(
+                    {
+                        "changes": [
+                            {
+                                "path": "tests/test_calculator.py",
+                                "change_type": "modified",
+                                "mode": "operation_based_edit",
+                                "operation": "append_to_file",
+                                "insert": (
+                                    "\n\ndef test_subtract():\n    assert True\n\n"
+                                    "def test_multiply():\n    assert True\n"
+                                ),
+                            }
+                        ]
+                    }
+                )
+            )
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(app, ["tests", "add", "calculator.py", "--all", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            symbols_section = provider.prompt.split("Symbols to test:", 1)[1].split("Target test file:", 1)[0]
+            self.assertIn("- subtract", symbols_section)
+            self.assertIn("- multiply", symbols_section)
+            self.assertNotIn("- add", symbols_section)
+            self.assertNotIn("- divide", symbols_section)
+            metadata = _read_json(_only_session(root) / "test_generation_metadata.json")
+            self.assertEqual(metadata["symbols_original"], ["add", "subtract", "multiply", "divide"])
+            self.assertEqual(metadata["symbols"], ["subtract", "multiply"])
+            self.assertEqual(metadata["existing_tests"]["status"], "partial")
+
+    def test_all_fully_covered_skips_provider(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            tests_dir = root / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_calculator.py").write_text(
+                "from calculator import add, subtract, multiply, divide\n\n"
+                "def test_add():\n    add(1, 2)\n"
+                "def test_subtract():\n    subtract(2, 1)\n"
+                "def test_multiply():\n    multiply(2, 2)\n"
+                "def test_divide():\n    divide(4, 2)\n",
+                encoding="utf-8",
+            )
+
+            with patch("trevvos_forge.cli.build_provider") as build_provider:
+                result = runner.invoke(app, ["tests", "add", "calculator.py", "--all", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            build_provider.assert_not_called()
+            metadata = _read_json(_only_session(root) / "test_generation_metadata.json")
+            self.assertEqual(metadata["status"], "skipped_existing_tests")
+            self.assertFalse(metadata["provider_called"])
+
+    def test_all_force_calls_provider_when_all_covered(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            tests_dir = root / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_calculator.py").write_text(
+                "from calculator import add, subtract, multiply, divide\n\n"
+                "def test_add():\n    add(1, 2)\n"
+                "def test_subtract():\n    subtract(2, 1)\n"
+                "def test_multiply():\n    multiply(2, 2)\n"
+                "def test_divide():\n    divide(4, 2)\n",
+                encoding="utf-8",
+            )
+            provider = _FakeProvider(
+                json.dumps(
+                    {
+                        "changes": [
+                            {
+                                "path": "tests/test_calculator.py",
+                                "change_type": "modified",
+                                "mode": "operation_based_edit",
+                                "operation": "append_to_file",
+                                "insert": "\n\ndef test_extra_edge_case():\n    assert True\n",
+                            }
+                        ]
+                    }
+                )
+            )
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(app, ["tests", "add", "calculator.py", "--all", "--force", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("Some or all symbols may already have tests", provider.prompt)
 
     def test_dry_run_saves_artifacts_without_changing_working_tree(self) -> None:
         runner = CliRunner()
@@ -659,6 +865,7 @@ class TestsAddCommandTests(unittest.TestCase):
         self.assertIn("--symbol", result.output)
         self.assertIn("--all", result.output)
         self.assertIn("--write", result.output)
+        self.assertIn("--force", result.output)
         self.assertIn("--keep-sandbox", result.output)
 
     def test_json_output(self) -> None:

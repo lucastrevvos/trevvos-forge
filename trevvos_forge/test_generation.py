@@ -33,6 +33,28 @@ class TestGenerationTarget:
     suggested_test_command: str
 
 
+@dataclass(frozen=True)
+class ExistingTestsCheck:
+    status: str
+    test_file: str
+    mode: str
+    symbols_requested: list[str]
+    symbols_covered: list[str]
+    symbols_missing: list[str]
+    symbols: dict[str, dict]
+
+    def to_dict(self) -> dict:
+        return {
+            "status": self.status,
+            "test_file": self.test_file,
+            "mode": self.mode,
+            "symbols_requested": self.symbols_requested,
+            "symbols_covered": self.symbols_covered,
+            "symbols_missing": self.symbols_missing,
+            "symbols": self.symbols,
+        }
+
+
 def validate_python_symbol(source_file: Path, symbol: str) -> SymbolInfo:
     try:
         tree = ast.parse(source_file.read_text(encoding="utf-8"))
@@ -129,6 +151,20 @@ def build_test_generation_target(
     )
 
 
+def target_with_symbols(target: TestGenerationTarget, symbols: list[SymbolInfo]) -> TestGenerationTarget:
+    return TestGenerationTarget(
+        source_path=target.source_path,
+        source_module=target.source_module,
+        symbol=target.symbol if not target.all_symbols else None,
+        symbols=symbols,
+        all_symbols=target.all_symbols,
+        test_file=target.test_file,
+        test_file_exists=target.test_file_exists,
+        framework=target.framework,
+        suggested_test_command=target.suggested_test_command,
+    )
+
+
 def detect_test_file(*, workspace_root: Path, source_relative: str) -> str:
     module_name = PurePosixPath(source_relative).stem
     candidates = [
@@ -214,6 +250,124 @@ def validate_file_changes_are_tests_only(file_changes: FileChangesOutput) -> Non
             )
 
 
+def build_existing_tests_check(
+    *,
+    target: TestGenerationTarget,
+    test_file_content: str | None,
+) -> ExistingTestsCheck:
+    requested = [symbol.name for symbol in target.symbols]
+    mode = "all_symbols" if target.all_symbols else "single_symbol"
+
+    if test_file_content is None:
+        symbols = {name: {"covered": False, "evidence": []} for name in requested}
+        return ExistingTestsCheck(
+            status="not_applicable",
+            test_file=target.test_file,
+            mode=mode,
+            symbols_requested=requested,
+            symbols_covered=[],
+            symbols_missing=requested,
+            symbols=symbols,
+        )
+
+    symbols = detect_existing_tests_for_symbols(
+        test_file_content=test_file_content,
+        symbols=requested,
+        framework=target.framework,
+    )
+    covered = [name for name in requested if symbols[name]["covered"]]
+    missing = [name for name in requested if not symbols[name]["covered"]]
+
+    if not covered:
+        status = "none"
+    elif not missing:
+        status = "all_covered"
+    else:
+        status = "partial"
+
+    return ExistingTestsCheck(
+        status=status,
+        test_file=target.test_file,
+        mode=mode,
+        symbols_requested=requested,
+        symbols_covered=covered,
+        symbols_missing=missing,
+        symbols=symbols,
+    )
+
+
+def detect_existing_tests_for_symbols(
+    *,
+    test_file_content: str,
+    symbols: list[str],
+    framework: str | None = None,
+) -> dict[str, dict]:
+    del framework
+    result = {symbol: {"covered": False, "evidence": []} for symbol in symbols}
+
+    try:
+        tree = ast.parse(test_file_content)
+    except SyntaxError:
+        return _detect_existing_tests_with_regex(test_file_content, symbols)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not node.name.startswith("test"):
+            continue
+
+        lower_test_name = node.name.lower()
+        called_names = _called_names(node)
+
+        for symbol in symbols:
+            lower_symbol = symbol.lower()
+            if lower_symbol in lower_test_name:
+                _add_symbol_evidence(result, symbol, node.name)
+            if symbol in called_names:
+                _add_symbol_evidence(result, symbol, f"calls {symbol}")
+
+    return result
+
+
+def _detect_existing_tests_with_regex(test_file_content: str, symbols: list[str]) -> dict[str, dict]:
+    result = {symbol: {"covered": False, "evidence": []} for symbol in symbols}
+
+    for symbol in symbols:
+        escaped = re.escape(symbol)
+        test_match = re.search(rf"def\s+(test_\w*{escaped}\w*)\s*\(", test_file_content, re.IGNORECASE)
+        if test_match:
+            _add_symbol_evidence(result, symbol, test_match.group(1))
+
+        if re.search(rf"(?<![\w.]){escaped}\s*\(", test_file_content) or re.search(
+            rf"\.{escaped}\s*\(",
+            test_file_content,
+        ):
+            _add_symbol_evidence(result, symbol, f"calls {symbol}")
+
+    return result
+
+
+def _called_names(node: ast.AST) -> set[str]:
+    names: set[str] = set()
+
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Call):
+            continue
+
+        if isinstance(child.func, ast.Name):
+            names.add(child.func.id)
+        elif isinstance(child.func, ast.Attribute):
+            names.add(child.func.attr)
+
+    return names
+
+
+def _add_symbol_evidence(result: dict[str, dict], symbol: str, evidence: str) -> None:
+    result[symbol]["covered"] = True
+    if evidence not in result[symbol]["evidence"]:
+        result[symbol]["evidence"].append(evidence)
+
+
 def normalize_change_path(path: str) -> str:
     normalized = path.strip().strip('"').replace("\\", "/").lstrip("/")
     if normalized.startswith("a/") or normalized.startswith("b/"):
@@ -245,6 +399,8 @@ def build_test_generation_context(
     target: TestGenerationTarget,
     source_content: str,
     test_content: str | None,
+    existing_tests_check: ExistingTestsCheck | None = None,
+    force: bool = False,
 ) -> str:
     existing_test = test_content if test_content is not None else "(test file does not exist yet)"
     mode = "all_symbols" if target.all_symbols else "single_symbol"
@@ -252,6 +408,7 @@ def build_test_generation_context(
     symbol_kind = target.symbol.kind if target.symbol is not None else "(multiple)"
     symbol_line = str(target.symbol.line) if target.symbol is not None else "(multiple)"
     symbols_to_test = "\n".join(f"- {symbol.name}" for symbol in target.symbols)
+    existing_tests_section = _existing_tests_prompt_section(existing_tests_check, force)
     return f"""Source file: {target.source_path}
 Source module: {target.source_module}
 Mode: {mode}
@@ -274,7 +431,10 @@ Source content:
 Existing target test content:
 ```python
 {existing_test}
-```"""
+```
+
+Existing tests analysis:
+{existing_tests_section}"""
 
 
 def build_test_generation_summary(
@@ -283,10 +443,12 @@ def build_test_generation_summary(
     files_changed: list[str],
     write: bool,
     status: str,
+    existing_tests_check: ExistingTestsCheck | None = None,
 ) -> str:
     changed = "\n".join(f"- {path}" for path in files_changed) or "- none"
     symbol = target.symbol.name if target.symbol is not None else "all"
     symbols_targeted = "\n".join(f"- {symbol.name}" for symbol in target.symbols)
+    existing_tests_summary = _existing_tests_summary_section(existing_tests_check)
     return f"""# Test Generation Summary
 
 Mode: controlled_execution
@@ -301,6 +463,10 @@ Status: {status}
 ## Symbols targeted
 
 {symbols_targeted}
+
+## Existing tests
+
+{existing_tests_summary}
 
 Files changed:
 {changed}
@@ -322,6 +488,9 @@ def metadata_for_target(
     sandbox_commands: list[str] | None = None,
     sandbox_command_source: str | None = None,
     symbol_selector: dict | None = None,
+    existing_tests_check: ExistingTestsCheck | None = None,
+    symbols_original: list[str] | None = None,
+    provider_called: bool | None = None,
     write_allowed: bool | None = None,
 ) -> dict:
     metadata = {
@@ -339,6 +508,19 @@ def metadata_for_target(
         "framework": target.framework,
         "test_type": "unit",
     }
+
+    if symbols_original is not None:
+        metadata["symbols_original"] = symbols_original
+
+    if existing_tests_check is not None:
+        metadata["existing_tests"] = {
+            "status": existing_tests_check.status,
+            "symbols_covered": existing_tests_check.symbols_covered,
+            "symbols_missing": existing_tests_check.symbols_missing,
+        }
+
+    if provider_called is not None:
+        metadata["provider_called"] = provider_called
 
     if sandbox_status is not None:
         metadata["sandbox"] = {
@@ -440,6 +622,44 @@ def _unittest_target_command(test_file: str) -> str | None:
         return None
 
     return "python -m unittest " + ".".join(module_parts)
+
+
+def _existing_tests_prompt_section(existing_tests_check: ExistingTestsCheck | None, force: bool) -> str:
+    if existing_tests_check is None:
+        return "- not available"
+
+    lines = [
+        f"- status: {existing_tests_check.status}",
+        f"- force: {str(force).lower()}",
+    ]
+
+    for symbol, details in existing_tests_check.symbols.items():
+        covered = "covered" if details.get("covered") else "missing"
+        evidence = details.get("evidence")
+        evidence_text = ", ".join(evidence) if isinstance(evidence, list) and evidence else "no evidence"
+        lines.append(f"- {symbol}: {covered} ({evidence_text})")
+
+    if force:
+        lines.append("- Some or all symbols may already have tests. Add only complementary tests and avoid duplicates.")
+    else:
+        lines.append("- Generate tests only for requested missing symbols. Do not duplicate existing tests.")
+
+    return "\n".join(lines)
+
+
+def _existing_tests_summary_section(existing_tests_check: ExistingTestsCheck | None) -> str:
+    if existing_tests_check is None:
+        return "Not available."
+
+    covered = "\n".join(f"- {symbol}" for symbol in existing_tests_check.symbols_covered) or "- none"
+    missing = "\n".join(f"- {symbol}" for symbol in existing_tests_check.symbols_missing) or "- none"
+    return f"""Status: {existing_tests_check.status}
+
+Covered:
+{covered}
+
+Missing:
+{missing}"""
 
 
 def raw_response_json(raw_response: str) -> dict:

@@ -175,7 +175,7 @@ trevvos review-diff
 | `trevvos plan` | Execution | No | Plan code changes |
 | `trevvos diff` | Execution | No | Generate and validate a patch |
 | `trevvos test` | Execution | No | Run verification commands |
-| `trevvos tests add` | Controlled Execution | Yes, tests only | Generate or append unit tests, running targeted file/symbol sandbox tests before write |
+| `trevvos tests add` | Controlled Execution | Yes, tests only | Generate or append missing unit tests, checking existing tests before sandboxed write |
 | `trevvos repair` | Execution | No | Generate a repair diff for a failed session |
 | `trevvos apply` | Execution | Yes | Apply a validated patch after confirmation |
 | `trevvos commit` | Execution | Yes | Commit related changes |

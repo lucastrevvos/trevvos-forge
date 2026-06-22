@@ -52,6 +52,7 @@ Generates or appends unit tests for a Python symbol. By default it is a dry-run:
 trevvos tests add calculator.py --symbol divide
 trevvos tests add calculator.py --all
 trevvos tests add calculator.py --symbol divide --test-file tests/test_calculator.py
+trevvos tests add calculator.py --symbol divide --force
 trevvos tests add calculator.py --symbol divide --write
 trevvos tests add calculator.py --symbol divide --keep-sandbox
 ```
@@ -60,6 +61,8 @@ With `--write`, Forge applies the generated patch only after sandbox tests pass 
 Use `--symbol` for one function/class or `--all` for all public testable symbols in a Python file. The options are mutually exclusive.
 
 When no `.trevvos/config.json` `test_commands` override is present, Forge tries to run the generated test file directly, such as `pytest tests/test_calculator.py` or `python -m unittest tests.test_calculator`. For pytest single-symbol generation, Forge uses a safe selector when possible, for example `pytest tests/test_calculator.py -k divide`. Configured `test_commands` take precedence over targeted commands.
+
+Before calling the provider, Forge checks the target test file for existing tests that appear to cover the requested symbol(s). A covered `--symbol` request is skipped by default; `--all` targets only missing symbols when coverage is partial. Use `--force` to generate complementary tests anyway.
 
 ### `trevvos review`
 

@@ -8,13 +8,17 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from trevvos_forge.cli import app
+from trevvos_forge.config_store import build_language_prompt_section
 from trevvos_forge.prompt_catalog import get_prompt
 from trevvos_forge.timeline import read_timeline
 
 
 class ReviewDiffCommandTests(unittest.TestCase):
     def test_diff_review_prompt_contains_required_sections_and_rules(self) -> None:
-        prompt = get_prompt("diff_review").render(diff_review_context="context")
+        prompt = get_prompt("diff_review").render(
+            diff_review_context="context",
+            language_context=build_language_prompt_section("en"),
+        )
 
         self.assertIn("Do not modify files", prompt)
         self.assertIn("Do not generate patches", prompt)

@@ -86,6 +86,9 @@ Contexto do projeto:
 
 Pedido do usuário:
 {instruction}
+
+Response language:
+{language_context}
 """,
     ),
     "plan_change_json": PromptTemplate(
@@ -194,6 +197,9 @@ Contexto do projeto:
 
 Pedido do usuário:
 {instruction}
+
+Response language:
+{language_context}
 """,
     ),
     "plan_retry": PromptTemplate(
@@ -294,6 +300,9 @@ Incorrect verification coverage example:
 }}
 
 The incorrect example above is not sufficient because it checks syntax only, not runtime CLI behavior.
+
+Response language:
+{language_context}
 
 Retry context:
 {retry_context}
@@ -921,6 +930,9 @@ Return Markdown with this exact structure:
 
 Project/profile/context:
 {analysis_context}
+
+Response language:
+{language_context}
 """,
     ),
     "code_explanation": PromptTemplate(
@@ -1008,6 +1020,9 @@ Use the requested explanation mode:
 
 Explanation context:
 {explanation_context}
+
+Response language:
+{language_context}
 """,
     ),
     "implementation_handoff_spec": PromptTemplate(
@@ -1084,6 +1099,9 @@ Start the copy-paste prompt with:
 
 Handoff context:
 {handoff_context}
+
+Response language:
+{language_context}
 """,
     ),
     "diff_review": PromptTemplate(
@@ -1150,6 +1168,9 @@ Reason: The diff appears to remove an existing CLI command while adding a new on
 
 Diff review context:
 {diff_review_context}
+
+Response language:
+{language_context}
 """,
     ),
     "technical_proposal": PromptTemplate(
@@ -1210,6 +1231,9 @@ Return Markdown with this exact structure:
 
 Proposal context:
 {proposal_context}
+
+Response language:
+{language_context}
 """,
     ),
 }

@@ -1,5 +1,6 @@
 import unittest
 
+from trevvos_forge.config_store import build_language_prompt_section
 from trevvos_forge.prompt_catalog import get_prompt
 
 
@@ -8,6 +9,7 @@ class FileChangesPromptTests(unittest.TestCase):
         prompt = get_prompt("plan_change_json").render(
             workspace_context="context",
             instruction="instruction",
+            language_context=build_language_prompt_section("en"),
         )
 
         self.assertIn("Expected behavior", prompt)
@@ -24,6 +26,7 @@ class FileChangesPromptTests(unittest.TestCase):
         prompt = get_prompt("plan_change_json").render(
             workspace_context="context",
             instruction="instruction",
+            language_context=build_language_prompt_section("en"),
         )
 
         self.assertIn("CLI as an executable command interface", prompt)
@@ -36,6 +39,7 @@ class FileChangesPromptTests(unittest.TestCase):
         prompt = get_prompt("plan_change_json").render(
             workspace_context="context",
             instruction="instruction",
+            language_context=build_language_prompt_section("en"),
         )
 
         self.assertIn("use unittest by default", prompt)
@@ -52,6 +56,7 @@ class FileChangesPromptTests(unittest.TestCase):
     def test_plan_retry_prompt_contains_schema_rules(self) -> None:
         prompt = get_prompt("plan_retry").render(
             retry_context="retry context",
+            language_context=build_language_prompt_section("en"),
         )
 
         self.assertIn("valid JSON", prompt)

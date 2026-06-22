@@ -7,6 +7,7 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from trevvos_forge.cli import app
+from trevvos_forge.config_store import build_language_prompt_section
 from trevvos_forge.prompt_catalog import get_prompt
 from trevvos_forge.timeline import read_timeline
 
@@ -53,7 +54,10 @@ class AnalyzeCommandTests(unittest.TestCase):
             self.assertFalse((session_dir / "file_changes.json").exists())
 
     def test_code_analysis_prompt_contains_required_sections_and_rules(self) -> None:
-        prompt = get_prompt("code_analysis").render(analysis_context="Project profile")
+        prompt = get_prompt("code_analysis").render(
+            analysis_context="Project profile",
+            language_context=build_language_prompt_section("en"),
+        )
 
         self.assertIn("Do not generate patches", prompt)
         self.assertIn("Do not modify files", prompt)

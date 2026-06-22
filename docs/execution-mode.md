@@ -1,0 +1,127 @@
+# Execution Mode
+
+Execution Mode is experimental.
+
+It can plan changes, generate patches, run tests, attempt repairs, apply diffs, and commit related changes. Use it carefully and review generated diffs before applying.
+
+Execution commands also use the current working directory as the project root. Run them from the root of the Git repository or project you want to modify.
+Execution reports can also honor the current project language setting or a per-command `--language` override when supported.
+
+## Important Warning
+
+Execution Mode is experimental. Review generated diffs carefully before applying.
+
+Local LLMs can produce structurally valid but semantically wrong code. Execution Mode includes guardrails, but it does not replace tests, code review, or developer judgment.
+
+## Commands
+
+### `trevvos plan`
+
+Creates a behavior-first plan for a requested change.
+
+```bash
+trevvos plan "add sqrt to the calculator CLI"
+trevvos plan --retry
+```
+
+### `trevvos diff`
+
+Generates a patch for the current session.
+
+```bash
+trevvos diff
+trevvos diff --retry
+```
+
+### `trevvos test`
+
+Runs verification commands.
+
+```bash
+trevvos test
+trevvos test --sandbox
+```
+
+### `trevvos review`
+
+Reviews a generated session using deterministic and optional LLM review.
+
+```bash
+trevvos review
+trevvos review --no-llm
+```
+
+### `trevvos repair`
+
+Attempts to generate a repair diff when there is a valid previous diff and repairable evidence.
+
+```bash
+trevvos repair
+```
+
+### `trevvos apply`
+
+Applies a validated patch after confirmation.
+
+```bash
+trevvos apply
+```
+
+### `trevvos commit`
+
+Commits related working-tree changes.
+
+```bash
+trevvos commit
+```
+
+### `trevvos work`
+
+Runs a controlled experimental agent loop. It can plan, diff, retry, sandbox test, review, and repair. It stops before apply by default.
+
+```bash
+trevvos work "add sqrt to the calculator CLI"
+```
+
+## Guardrails
+
+Execution Mode includes:
+
+- structured plan artifacts;
+- schema validation for model outputs;
+- generated patch validation;
+- `git apply --check`;
+- sandbox testing;
+- retry metadata;
+- repair metadata;
+- warning artifacts;
+- CLI regression checks;
+- verification coverage checks;
+- confirmation before apply.
+
+## Recommended Experimental Flow
+
+```bash
+trevvos plan "add sqrt to the calculator CLI"
+trevvos diff
+trevvos test --sandbox
+trevvos review --no-llm
+trevvos apply
+```
+
+Before applying:
+
+- inspect `diff.patch`;
+- inspect warnings and review artifacts;
+- run relevant tests;
+- make sure existing behavior is preserved.
+
+## When To Prefer Advisory Mode
+
+Prefer Advisory Mode when:
+
+- the change is structural;
+- the project is unfamiliar;
+- local model quality is uncertain;
+- you want a proposal or handoff instead of automatic editing;
+- you need a review before commit.

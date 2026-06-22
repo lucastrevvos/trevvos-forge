@@ -7,13 +7,17 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from trevvos_forge.cli import app
+from trevvos_forge.config_store import build_language_prompt_section
 from trevvos_forge.prompt_catalog import get_prompt
 from trevvos_forge.timeline import read_timeline
 
 
 class SpecCommandTests(unittest.TestCase):
     def test_implementation_handoff_spec_prompt_contains_required_sections_and_rules(self) -> None:
-        prompt = get_prompt("implementation_handoff_spec").render(handoff_context="Project profile")
+        prompt = get_prompt("implementation_handoff_spec").render(
+            handoff_context="Project profile",
+            language_context=build_language_prompt_section("en"),
+        )
 
         self.assertIn("Implementation Handoff Spec", prompt)
         self.assertIn("Copy-paste prompt", prompt)

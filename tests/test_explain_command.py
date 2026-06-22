@@ -7,13 +7,17 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from trevvos_forge.cli import app
+from trevvos_forge.config_store import build_language_prompt_section
 from trevvos_forge.prompt_catalog import get_prompt
 from trevvos_forge.timeline import read_timeline
 
 
 class ExplainCommandTests(unittest.TestCase):
     def test_code_explanation_prompt_contains_required_sections_and_rules(self) -> None:
-        prompt = get_prompt("code_explanation").render(explanation_context="context")
+        prompt = get_prompt("code_explanation").render(
+            explanation_context="context",
+            language_context=build_language_prompt_section("en"),
+        )
 
         self.assertIn("Do not modify files", prompt)
         self.assertIn("Do not generate patches", prompt)

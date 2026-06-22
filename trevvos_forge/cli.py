@@ -22,6 +22,13 @@ from trevvos_forge.commit_workflow import (
     write_commit_artifacts,
 )
 from trevvos_forge.cli_regression_check import build_cli_regression_check, write_cli_regression_check
+from trevvos_forge.config_store import (
+    build_language_prompt_section,
+    load_config,
+    get_language,
+    normalize_language,
+    set_language,
+)
 from trevvos_forge.context_builder import build_context, content_with_line_numbers
 from trevvos_forge.diff_builder import build_unified_diff_from_file_changes
 from trevvos_forge.diff_validation import validate_diff_patch
@@ -123,7 +130,12 @@ from trevvos_forge.workspace import read_workspace_file, scan_workspace
 
 app = typer.Typer(
     name="trevvos",
-    help="Trevvos Forge: local-first AI engineering assistant. Advisory: inspect/analyze. Execution: plan/diff/test/repair/apply/commit/work.",
+    help=(
+        "Trevvos Forge: local-first AI engineering advisor. "
+        "Advisory: inspect/analyze/explain/propose/spec/review-diff. "
+        "Execution experimental: plan/diff/test/repair/apply/commit/work. "
+        "Uses the current working directory as the project root by default."
+    ),
     no_args_is_help=True,
 )
 
@@ -145,8 +157,15 @@ prompts_app = typer.Typer(
     no_args_is_help=True,
 )
 
+config_app = typer.Typer(
+    name="config",
+    help="Manage Trevvos Forge configuration.",
+    no_args_is_help=True,
+)
+
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(prompts_app, name="prompts")
+app.add_typer(config_app, name="config")
 app.add_typer(models_app, name="models")
 
 console = Console()
@@ -165,8 +184,67 @@ def callback() -> None:
     pass
 
 
+@config_app.command("show")
+def config_show(
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """
+    Show the current Trevvos Forge configuration.
+    """
+    try:
+        workspace_root = path.resolve()
+        language = _resolve_language(workspace_root, None)
+        config = load_config(workspace_root)
+
+        console.print("Trevvos Forge config\n")
+        console.print(f"language: {language}")
+
+        if "test_commands" in config:
+            console.print(f"test_commands: {config['test_commands']}")
+
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
+@config_app.command("set")
+def config_set(
+    key: str,
+    value: str,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """
+    Update a Trevvos Forge configuration value.
+    """
+    try:
+        workspace_root = path.resolve()
+
+        if key != "language":
+            raise DiffError("Unsupported config key. Only `language` is supported.")
+
+        language = set_language(workspace_root, value)
+        console.print("Trevvos Forge config updated\n")
+        console.print(f"language: {language['language']}")
+
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
 def load_settings() -> ForgeSettings:
     return ForgeSettings.from_env()
+
+
+def _resolve_language(repo_root: Path, requested_language: str | None) -> str:
+    if requested_language is not None:
+        return normalize_language(requested_language)
+    return get_language(repo_root)
 
 
 def build_provider(settings: ForgeSettings) -> OllamaProvider:
@@ -1194,6 +1272,10 @@ def analyze(
         Path,
         typer.Option("--path", "-p", help="Workspace root path."),
     ] = Path("."),
+    language: Annotated[
+        str | None,
+        typer.Option("--language", help="Response language for advisory reports. Supported: en, pt-BR."),
+    ] = None,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Print analysis metadata as JSON."),
@@ -1214,6 +1296,7 @@ def analyze(
     try:
         workspace_root = path.resolve()
         settings = load_settings()
+        resolved_language = _resolve_language(workspace_root, language)
         provider = build_provider(settings)
         profile = scan_project(workspace_root)
         save_project_profile(workspace_root, profile)
@@ -1234,7 +1317,10 @@ def analyze(
         _record_timeline_event(session, "analyze_started", "trevvos analyze", "started")
 
         prompt_template = get_prompt("code_analysis")
-        prompt = prompt_template.render(analysis_context=context_markdown)
+        prompt = prompt_template.render(
+            analysis_context=context_markdown,
+            language_context=build_language_prompt_section(resolved_language),
+        )
 
         write_session_text(session=session, file_name="context.md", content=context_markdown)
         write_session_json(
@@ -1261,6 +1347,7 @@ def analyze(
             "target": str(target) if target else "project",
             "prompt": prompt_template.ref,
             "model": settings.model,
+            "language": resolved_language,
             "files_analyzed": files_analyzed,
             "status": "succeeded",
         }
@@ -1307,6 +1394,7 @@ def analyze(
                     "mode": "advisory",
                     "command": "analyze",
                     "target": str(target) if target else "project",
+                    "language": _resolve_language(workspace_root, language) if 'workspace_root' in locals() else None,
                     "status": "failed",
                     "error": str(exc),
                 },
@@ -1333,6 +1421,10 @@ def explain(
         Path,
         typer.Option("--path", "-p", help="Workspace root path."),
     ] = Path("."),
+    language: Annotated[
+        str | None,
+        typer.Option("--language", help="Response language for advisory reports. Supported: en, pt-BR."),
+    ] = None,
     symbol: Annotated[
         str | None,
         typer.Option("--symbol", help="Function or class to explain."),
@@ -1357,6 +1449,7 @@ def explain(
     try:
         workspace_root = path.resolve()
         settings = load_settings()
+        resolved_language = _resolve_language(workspace_root, language)
         profile = scan_project(workspace_root)
         save_project_profile(workspace_root, profile)
         explanation_context, files_explained = _build_explanation_context(
@@ -1377,7 +1470,10 @@ def explain(
         _record_timeline_event(session, "explain_started", "trevvos explain", "started")
 
         prompt_template = get_prompt("code_explanation")
-        prompt = prompt_template.render(explanation_context=explanation_context)
+        prompt = prompt_template.render(
+            explanation_context=explanation_context,
+            language_context=build_language_prompt_section(resolved_language),
+        )
 
         write_session_text(session=session, file_name="context.md", content=explanation_context)
         write_session_json(
@@ -1408,6 +1504,7 @@ def explain(
             "flow": flow,
             "prompt": prompt_template.ref,
             "model": settings.model,
+            "language": resolved_language,
             "files_explained": files_explained,
             "status": "succeeded",
         }
@@ -1457,6 +1554,7 @@ def explain(
                     "target": str(target),
                     "symbol": symbol,
                     "flow": flow,
+                    "language": _resolve_language(workspace_root, language) if 'workspace_root' in locals() else None,
                     "status": "failed",
                     "error": str(exc),
                 },
@@ -1483,6 +1581,10 @@ def spec(
         Path,
         typer.Option("--path", "-p", help="Workspace root path."),
     ] = Path("."),
+    language: Annotated[
+        str | None,
+        typer.Option("--language", help="Response language for advisory reports. Supported: en, pt-BR."),
+    ] = None,
     target_ai: Annotated[
         str,
         typer.Option("--target", help="External AI target: generic, codex, cursor, or claude."),
@@ -1518,6 +1620,7 @@ def spec(
 
         workspace_root = path.resolve()
         settings = load_settings()
+        resolved_language = _resolve_language(workspace_root, language)
         profile = scan_project(workspace_root)
         save_project_profile(workspace_root, profile)
         handoff_context, files_included = _build_handoff_context(
@@ -1539,7 +1642,10 @@ def spec(
         _record_timeline_event(session, "spec_started", "trevvos spec", "started")
 
         prompt_template = get_prompt("implementation_handoff_spec")
-        prompt = prompt_template.render(handoff_context=handoff_context)
+        prompt = prompt_template.render(
+            handoff_context=handoff_context,
+            language_context=build_language_prompt_section(resolved_language),
+        )
 
         write_session_text(session=session, file_name="context.md", content=handoff_context)
         write_session_json(
@@ -1568,6 +1674,7 @@ def spec(
             "request": request,
             "prompt": prompt_template.ref,
             "model": settings.model,
+            "language": resolved_language,
             "files_included": files_included,
             "status": "succeeded",
             "artifacts": {
@@ -1626,6 +1733,7 @@ def spec(
                     "command": "spec",
                     "target": target_ai,
                     "request": request,
+                    "language": _resolve_language(workspace_root, language) if 'workspace_root' in locals() else None,
                     "status": "failed",
                     "error": str(exc),
                 },
@@ -1648,6 +1756,10 @@ def review_diff(
         Path,
         typer.Option("--path", "-p", help="Workspace root path."),
     ] = Path("."),
+    language: Annotated[
+        str | None,
+        typer.Option("--language", help="Response language for advisory reports. Supported: en, pt-BR."),
+    ] = None,
     staged: Annotated[
         bool,
         typer.Option("--staged", help="Review staged changes only."),
@@ -1667,6 +1779,7 @@ def review_diff(
     session = None
     try:
         workspace_root = path.resolve()
+        resolved_language = _resolve_language(workspace_root, language)
         git_status = _run_git_capture(workspace_root, ["status", "--short"])
         diff_args = ["diff", "--cached"] if staged else ["diff"]
         diff_stat = _run_git_capture(workspace_root, [*diff_args, "--stat"])
@@ -1697,7 +1810,10 @@ def review_diff(
         _record_timeline_event(session, "review_diff_started", "trevvos review-diff", "started")
 
         prompt_template = get_prompt("diff_review")
-        prompt = prompt_template.render(diff_review_context=review_context)
+        prompt = prompt_template.render(
+            diff_review_context=review_context,
+            language_context=build_language_prompt_section(resolved_language),
+        )
 
         write_session_text(session=session, file_name="context.md", content=review_context)
         write_session_text(session=session, file_name="git_status.txt", content=git_status)
@@ -1718,6 +1834,7 @@ def review_diff(
             "staged": staged,
             "prompt": prompt_template.ref,
             "model": settings.model,
+            "language": resolved_language,
             "files_changed": files_changed,
             "status": "succeeded",
             "final_recommendation": _extract_final_recommendation(raw_response),
@@ -1776,6 +1893,7 @@ def review_diff(
                     "mode": "advisory",
                     "command": "review-diff",
                     "staged": staged,
+                    "language": _resolve_language(workspace_root, language) if 'workspace_root' in locals() else None,
                     "status": "failed",
                     "error": str(exc),
                 },
@@ -1802,6 +1920,10 @@ def propose(
         Path,
         typer.Option("--path", "-p", help="Workspace root path."),
     ] = Path("."),
+    language: Annotated[
+        str | None,
+        typer.Option("--language", help="Response language for advisory reports. Supported: en, pt-BR."),
+    ] = None,
     target: Annotated[
         Path | None,
         typer.Option("--target", help="Optional file or directory to prioritize."),
@@ -1829,6 +1951,7 @@ def propose(
 
         workspace_root = path.resolve()
         settings = load_settings()
+        resolved_language = _resolve_language(workspace_root, language)
         profile = scan_project(workspace_root)
         save_project_profile(workspace_root, profile)
         proposal_context, files_considered = _build_proposal_context(
@@ -1849,7 +1972,10 @@ def propose(
         _record_timeline_event(session, "propose_started", "trevvos propose", "started")
 
         prompt_template = get_prompt("technical_proposal")
-        prompt = prompt_template.render(proposal_context=proposal_context)
+        prompt = prompt_template.render(
+            proposal_context=proposal_context,
+            language_context=build_language_prompt_section(resolved_language),
+        )
 
         write_session_text(session=session, file_name="context.md", content=proposal_context)
         write_session_json(
@@ -1879,6 +2005,7 @@ def propose(
             "target": str(target) if target is not None else None,
             "prompt": prompt_template.ref,
             "model": settings.model,
+            "language": resolved_language,
             "files_considered": files_considered,
             "status": "succeeded",
             "artifacts": {
@@ -1937,6 +2064,7 @@ def propose(
                     "command": "propose",
                     "request": request,
                     "target": str(target) if target is not None else None,
+                    "language": _resolve_language(workspace_root, language) if 'workspace_root' in locals() else None,
                     "status": "failed",
                     "error": str(exc),
                 },
@@ -2423,7 +2551,12 @@ def plan(
             if previous_error_type is None and coverage_retry:
                 previous_error_type = "verification_coverage_failed"
             prompt_template = get_prompt("plan_retry")
-            prompt = prompt_template.render(retry_context=_build_plan_retry_context(session))
+            prompt = prompt_template.render(
+                retry_context=_build_plan_retry_context(session),
+                language_context=build_language_prompt_section(
+                    get_language(Path(session.metadata.workspace_root))
+                ),
+            )
 
             write_session_text(session=session, file_name="plan_retry_prompt.md", content=prompt)
             _record_timeline_event(
@@ -2584,6 +2717,7 @@ def plan(
         prompt = prompt_template.render(
             instruction=instruction,
             workspace_context=context_markdown,
+            language_context=build_language_prompt_section(get_language(path)),
         )
 
         write_session_text(

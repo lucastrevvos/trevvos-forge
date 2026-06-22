@@ -44,6 +44,8 @@ from trevvos_forge.review_artifacts import (
     build_change_summary_markdown,
     build_patch_preview,
     build_semantic_review_json,
+    build_semantic_review_json_from_context,
+    render_deterministic_review_text,
 )
 from trevvos_forge.review_workflow import (
     build_review_context,
@@ -954,6 +956,8 @@ def diff(
             file_changes=file_changes,
             warnings=diff_warnings,
             plan_constraints_status=plan_constraints_check["status"],
+            plan=plan_constraints,
+            plan_constraints_check=plan_constraints_check,
         )
 
         write_session_text(
@@ -1596,6 +1600,13 @@ def review(
 
 
 def _print_deterministic_review(session_path: Path, context: dict, reason: str | None) -> None:
+    review_payload = build_semantic_review_json_from_context(context)
+    semantic_review_path = session_path / "semantic_review.json"
+    semantic_review_path.write_text(
+        json.dumps(review_payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
     console.print("[yellow]Review mode: deterministic[/yellow]\n")
 
     if reason:
@@ -1605,37 +1616,22 @@ def _print_deterministic_review(session_path: Path, context: dict, reason: str |
             "to run LLM-assisted review.\n"
         )
 
-    deterministic_review = context.get("deterministic_review")
     files_changed = context.get("files_changed")
-    warnings = context.get("warnings")
-    test_results = context.get("test_results")
 
     console.print("[bold]Deterministic review[/bold]")
     console.print(f"  Files changed: {len(files_changed) if isinstance(files_changed, list) else 0}")
-    console.print(f"  Warnings:      {len(warnings) if isinstance(warnings, list) else 0}")
+    console.print(f"  Warnings:      {len(review_payload.get('warnings', []))}")
 
-    if isinstance(deterministic_review, dict):
-        validations = deterministic_review.get("validations")
+    validations = review_payload.get("validations")
+    if isinstance(validations, dict):
+        console.print(f"  Safety validation: {validations.get('safety_validation', 'unknown')}")
+        console.print(f"  git apply --check: {validations.get('git_apply_check', 'unknown')}")
 
-        if isinstance(validations, dict):
-            console.print(f"  Safety validation: {validations.get('safety_validation', 'unknown')}")
-            console.print(f"  git apply --check: {validations.get('git_apply_check', 'unknown')}")
-    else:
-        console.print("  Safety validation: unknown")
-        console.print("  git apply --check: unknown")
-
-    if isinstance(test_results, dict):
-        console.print(f"  Test status: {test_results.get('status', 'unknown')}")
-    else:
-        console.print("  Test status: not available")
+    console.print()
+    console.print(render_deterministic_review_text(review_payload))
 
     console.print("\n[bold]Artifacts[/bold]")
-    semantic_review_path = session_path / "semantic_review.json"
-
-    if semantic_review_path.exists():
-        console.print(f"  - semantic_review.json: {semantic_review_path}")
-    else:
-        console.print("  - semantic_review.json: not available")
+    console.print(f"  - semantic_review.json: {semantic_review_path}")
 
 
 @app.command()

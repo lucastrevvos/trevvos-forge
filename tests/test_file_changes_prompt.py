@@ -89,6 +89,13 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("Do not invent files", prompt)
         self.assertIn("Consider warnings", prompt)
         self.assertIn("Return ONLY valid JSON", prompt)
+        self.assertIn("acceptance_criteria", prompt)
+        self.assertIn("expected_behavior", prompt)
+        self.assertIn("suggested_verification_commands", prompt)
+        self.assertIn("sandbox_test_results", prompt)
+        self.assertIn("working_tree_test_results", prompt)
+        self.assertIn("too literal", prompt)
+        self.assertIn("Do not claim acceptance criteria are satisfied unless there is evidence", prompt)
 
     def test_file_changes_retry_prompt_contains_repair_rules(self) -> None:
         prompt = get_prompt("file_changes_retry").render(

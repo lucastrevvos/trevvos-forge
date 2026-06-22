@@ -473,9 +473,17 @@ It must not approve automatic apply, command execution, or commit.
 
 Rules:
 - Review whether the patch appears to satisfy the original request.
+- Review expected_behavior, acceptance_criteria, and suggested_verification_commands from the plan.
+- Check whether suggested verification commands were executed and whether they passed.
+- Consider sandbox_test_results and working_tree_test_results separately.
+- Consider plan_constraints_check and any warnings.
 - Use only the provided evidence.
 - Do not invent files, tests, commands, or project facts.
 - Do not claim tests passed unless test_results explicitly says they passed.
+- Do not claim acceptance criteria are satisfied unless there is evidence.
+- If verification commands were not run, say evidence is missing.
+- If verification commands failed, mark has_concerns or blocked depending on severity.
+- If the patch only lists functions but expected behavior requires executing CLI commands, mark has_concerns as too literal.
 - Consider warnings as reasons for human attention.
 - Consider full_file_rewrite changes as higher risk than operation_based_edit changes.
 - Treat missing tests as information, not an automatic failure.
@@ -485,10 +493,14 @@ Rules:
   - verdict: one of "appears_ok", "needs_human_review", "has_concerns", "blocked"
   - confidence: "low", "medium", or "high"
   - request_alignment: one of "appears_aligned", "partially_aligned", "not_aligned", "unknown"
+  - acceptance_criteria_alignment: one of "appears_satisfied", "partially_satisfied", "not_satisfied", "unknown"
+  - verification_evidence: one of "passed", "failed", "partial", "missing", "unknown"
   - risk_level: one of "low", "medium", "high", "unknown"
   - summary: string
   - risks: list of strings
+  - concerns: list of strings
   - suggested_checks: list of strings
+  - missing_evidence: list of strings
   - evidence_used: list of strings
   - notes: list of strings
 

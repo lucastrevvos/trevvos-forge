@@ -16,6 +16,19 @@ ALLOWED_REQUEST_ALIGNMENTS = {
     "not_aligned",
     "unknown",
 }
+ALLOWED_ACCEPTANCE_ALIGNMENTS = {
+    "appears_satisfied",
+    "partially_satisfied",
+    "not_satisfied",
+    "unknown",
+}
+ALLOWED_VERIFICATION_EVIDENCE = {
+    "passed",
+    "failed",
+    "partial",
+    "missing",
+    "unknown",
+}
 
 
 def build_review_context(
@@ -25,12 +38,15 @@ def build_review_context(
 ) -> dict:
     evidence_used: list[str] = []
     request = _read_optional_text(session_dir / "user_request.txt")
-    plan = _read_optional_text(session_dir / "plan.md")
+    plan_markdown = _read_optional_text(session_dir / "plan.md")
+    plan_json = _read_optional_json(session_dir / "plan.json")
+    plan = _plan_fields(plan_json)
     diff_patch = _read_optional_text(session_dir / "diff.patch")
     change_summary = _read_optional_text(session_dir / "change_summary.md")
     deterministic_review = _read_optional_json(session_dir / "semantic_review.json")
     file_changes = _read_optional_json(session_dir / "file_changes.json")
     diff_warnings = _read_optional_json(session_dir / "diff_warnings.json")
+    plan_constraints_check = _read_optional_json(session_dir / "plan_constraints_check.json")
     legacy_test_results = _read_optional_json(session_dir / "test_results.json")
     sandbox_test_results = _mode_specific_test_results(
         session_dir=session_dir,
@@ -57,8 +73,11 @@ def build_review_context(
     if request is not None:
         evidence_used.append("user_request.txt")
 
-    if plan is not None:
+    if plan_markdown is not None:
         evidence_used.append("plan.md")
+
+    if isinstance(plan_json, dict):
+        evidence_used.append("plan.json")
 
     patch_preview, patch_truncated = _limit_lines(diff_patch or "", max_patch_lines)
 
@@ -70,6 +89,9 @@ def build_review_context(
 
     if deterministic_review is not None:
         evidence_used.append("semantic_review.json")
+
+    if isinstance(plan_constraints_check, dict):
+        evidence_used.append("plan_constraints_check.json")
 
     if sandbox_test_results is not None:
         evidence_used.append("sandbox_test_results.json" if (session_dir / "sandbox_test_results.json").exists() else "test_results.json")
@@ -114,8 +136,10 @@ def build_review_context(
         "session_status": _session_status(metadata),
         "request_available": request is not None and bool(request.strip()),
         "request": request,
-        "plan_available": plan is not None and bool(plan.strip()),
+        "plan_available": plan_markdown is not None and bool(plan_markdown.strip()),
         "plan": plan,
+        "plan_markdown": plan_markdown,
+        "plan_constraints_check": plan_constraints_check if isinstance(plan_constraints_check, dict) else None,
         "files_changed": _files_changed(file_changes, deterministic_review),
         "patch_available": diff_patch is not None and bool(diff_patch.strip()),
         "patch_preview": patch_preview,
@@ -165,11 +189,23 @@ def normalize_llm_review(review: dict) -> dict:
         ALLOWED_REQUEST_ALIGNMENTS,
         "unknown",
     )
+    acceptance_criteria_alignment = _allowed_value(
+        review.get("acceptance_criteria_alignment"),
+        ALLOWED_ACCEPTANCE_ALIGNMENTS,
+        "unknown",
+    )
+    verification_evidence = _allowed_value(
+        review.get("verification_evidence"),
+        ALLOWED_VERIFICATION_EVIDENCE,
+        "unknown",
+    )
     confidence = review.get("confidence") if isinstance(review.get("confidence"), str) else "unknown"
     summary = review.get("summary") if isinstance(review.get("summary"), str) else ""
     risks = _string_list(review.get("risks"))
     suggested_checks = _string_list(review.get("suggested_checks"))
     evidence_used = _string_list(review.get("evidence_used"))
+    missing_evidence = _string_list(review.get("missing_evidence"))
+    concerns = _string_list(review.get("concerns"))
     notes = _string_list(review.get("notes"))
 
     if INFORMATIONAL_NOTE not in notes:
@@ -181,10 +217,14 @@ def normalize_llm_review(review: dict) -> dict:
         "verdict": verdict,
         "confidence": confidence,
         "request_alignment": request_alignment,
+        "acceptance_criteria_alignment": acceptance_criteria_alignment,
+        "verification_evidence": verification_evidence,
         "risk_level": risk_level,
         "summary": summary,
         "risks": risks,
+        "concerns": concerns,
         "suggested_checks": suggested_checks,
+        "missing_evidence": missing_evidence,
         "evidence_used": evidence_used,
         "notes": notes,
     }
@@ -214,6 +254,14 @@ Informational only. This review does not prove semantic correctness.
 
 {review.get("request_alignment", "unknown")}
 
+## Acceptance Criteria Alignment
+
+{review.get("acceptance_criteria_alignment", "unknown")}
+
+## Verification Evidence
+
+{review.get("verification_evidence", "unknown")}
+
 ## Risk Level
 
 {review.get("risk_level", "unknown")}
@@ -221,6 +269,14 @@ Informational only. This review does not prove semantic correctness.
 ## Risks
 
 {risks}
+
+## Concerns
+
+{_markdown_list(_string_list(review.get("concerns")))}
+
+## Missing Evidence
+
+{_markdown_list(_string_list(review.get("missing_evidence")))}
 
 ## Suggested Checks
 
@@ -259,14 +315,18 @@ def _parse_failed_review(error_message: str) -> dict:
         "verdict": "needs_human_review",
         "confidence": "unknown",
         "request_alignment": "unknown",
+        "acceptance_criteria_alignment": "unknown",
+        "verification_evidence": "unknown",
         "risk_level": "unknown",
         "summary": "LLM review response could not be parsed.",
         "risks": [
             "Review output was not valid structured JSON.",
         ],
+        "concerns": [],
         "suggested_checks": [
             "Inspect llm_review_raw.txt and review the patch manually.",
         ],
+        "missing_evidence": [],
         "evidence_used": [],
         "notes": [
             error_message,
@@ -377,6 +437,22 @@ def _session_status(metadata: Any) -> str | None:
         return metadata["status"]
 
     return None
+
+
+def _plan_fields(plan_json: Any) -> dict[str, list[str]]:
+    if not isinstance(plan_json, dict):
+        plan_json = {}
+
+    return {
+        "expected_behavior": _string_list(plan_json.get("expected_behavior")),
+        "acceptance_criteria": _string_list(plan_json.get("acceptance_criteria")),
+        "suggested_verification_commands": _string_list(
+            plan_json.get("suggested_verification_commands")
+        ),
+        "files_to_create": _string_list(plan_json.get("files_to_create")),
+        "files_to_modify": _string_list(plan_json.get("files_to_modify")),
+        "files_not_to_modify": _string_list(plan_json.get("files_not_to_modify")),
+    }
 
 
 def _files_changed(file_changes: Any, deterministic_review: Any) -> list[dict]:

@@ -8,6 +8,7 @@ from trevvos_forge.review_artifacts import (
     build_change_summary_markdown,
     build_patch_preview,
     build_semantic_review_json,
+    render_deterministic_review_text,
 )
 from trevvos_forge.sessions import create_session, write_session_json, write_session_text
 
@@ -89,8 +90,133 @@ class ReviewArtifactsTests(unittest.TestCase):
         self.assertEqual(review["files_changed"][0]["path"], "README.md")
         self.assertEqual(review["validations"]["safety_validation"], "passed")
         self.assertEqual(review["validations"]["git_apply_check"], "passed")
-        self.assertEqual(review["warnings"], ["warning"])
+        self.assertIn("plan_review", review)
+        self.assertIn("test_evidence", review)
+        self.assertIn("plan_constraints", review)
+        self.assertIn("concerns", review)
+        self.assertIn("warning", review["warnings"])
+        self.assertIn("No acceptance criteria were available in the plan.", review["warnings"])
         self.assertIn(SEMANTIC_REVIEW_NOTE, review["notes"])
+
+    def test_semantic_review_warns_when_plan_commands_were_not_run(self) -> None:
+        file_changes = FileChangesOutput(
+            changes=[
+                FileChange(
+                    path="main.py",
+                    change_type="created",
+                    content="print('ok')\n",
+                    mode="full_file_rewrite",
+                )
+            ]
+        )
+
+        review = build_semantic_review_json(
+            request="Create CLI",
+            file_changes=file_changes,
+            warnings=[],
+            plan={
+                "expected_behavior": ["python main.py prints ok"],
+                "acceptance_criteria": ["CLI runs"],
+                "suggested_verification_commands": ["python main.py"],
+            },
+        )
+
+        self.assertEqual(review["plan_review"]["plan_commands_executed"], "no")
+        self.assertIn(
+            "Suggested verification commands exist, but sandbox tests were not run.",
+            review["warnings"],
+        )
+        self.assertIn(
+            "Plan verification commands were not fully executed.",
+            review["warnings"],
+        )
+
+    def test_semantic_review_detects_plan_commands_executed(self) -> None:
+        file_changes = FileChangesOutput(
+            changes=[
+                FileChange(
+                    path="main.py",
+                    change_type="created",
+                    content="print('ok')\n",
+                    mode="full_file_rewrite",
+                )
+            ]
+        )
+
+        review = build_semantic_review_json(
+            request="Create CLI",
+            file_changes=file_changes,
+            warnings=[],
+            plan={
+                "acceptance_criteria": ["CLI runs"],
+                "suggested_verification_commands": ["python main.py"],
+            },
+            sandbox_test_results={
+                "mode": "sandbox",
+                "status": "passed",
+                "command_sources": {
+                    "plan": ["python main.py"],
+                    "executed": ["python main.py"],
+                },
+            },
+        )
+
+        self.assertEqual(review["plan_review"]["plan_commands_executed"], "yes")
+        self.assertNotIn(
+            "Plan verification commands were not fully executed.",
+            review["warnings"],
+        )
+
+    def test_semantic_review_concerns_for_failed_tests_and_constraints(self) -> None:
+        file_changes = FileChangesOutput(
+            changes=[
+                FileChange(
+                    path="calculator.py",
+                    change_type="modified",
+                    content="",
+                    mode="full_file_rewrite",
+                )
+            ]
+        )
+
+        review = build_semantic_review_json(
+            request="Do not modify calculator.py",
+            file_changes=file_changes,
+            warnings=[],
+            plan={"acceptance_criteria": ["Respect plan constraints"]},
+            plan_constraints_check={"status": "failed"},
+            sandbox_test_results={"mode": "sandbox", "status": "failed"},
+            working_tree_test_results={"mode": "working_tree", "status": "failed"},
+        )
+
+        self.assertIn("Sandbox tests failed.", review["concerns"])
+        self.assertIn("Working tree tests failed.", review["concerns"])
+        self.assertIn("Plan constraints check failed.", review["concerns"])
+
+    def test_render_deterministic_review_text_contains_sections(self) -> None:
+        text = render_deterministic_review_text(
+            {
+                "plan_review": {
+                    "expected_behavior_count": 2,
+                    "acceptance_criteria_count": 1,
+                    "suggested_verification_commands_count": 1,
+                    "plan_commands_executed": "yes",
+                },
+                "test_evidence": {
+                    "sandbox": "passed",
+                    "working_tree": "passed",
+                },
+                "plan_constraints": {"status": "passed"},
+                "concerns": [],
+                "warnings": [],
+            }
+        )
+
+        self.assertIn("Plan evidence", text)
+        self.assertIn("Test evidence", text)
+        self.assertIn("Plan constraints", text)
+        self.assertIn("Concerns", text)
+        self.assertIn("Warnings", text)
 
     def test_patch_preview_short(self) -> None:
         preview, truncated = build_patch_preview("a\nb\nc\n", max_lines=5)

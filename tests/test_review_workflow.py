@@ -5,6 +5,7 @@ from pathlib import Path
 
 from trevvos_forge.review_workflow import (
     build_review_context,
+    build_semantic_review_prompt,
     parse_llm_review_response,
     render_llm_review_markdown,
     write_llm_review_artifacts,
@@ -37,6 +38,7 @@ class ReviewWorkflowTests(unittest.TestCase):
             self.assertIn("semantic_review.json", context["evidence_used"])
             self.assertIn("test_results.json", context["evidence_used"])
             self.assertIn("diff_warnings.json", context["evidence_used"])
+            self.assertEqual(context["plan"]["acceptance_criteria"], [])
             self.assertEqual(context["patch_preview"], "line 0\nline 1\nline 2")
             self.assertTrue(context["patch_preview_truncated"])
             self.assertEqual(context["test_output_tail"], "log 6\nlog 7\nlog 8\nlog 9")
@@ -78,6 +80,69 @@ class ReviewWorkflowTests(unittest.TestCase):
             self.assertEqual(context["sandbox_test_output_tail"], "sandbox ok")
             self.assertEqual(context["working_tree_test_output_tail"], "working ok")
 
+    def test_build_review_context_includes_plan_fields_and_constraints(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            session_dir = Path(temporary_directory)
+            (session_dir / "plan.json").write_text(
+                json.dumps(
+                    {
+                        "expected_behavior": ["python main.py add 2 3 prints 5"],
+                        "acceptance_criteria": ["Uses argparse"],
+                        "suggested_verification_commands": ["python main.py add 2 3"],
+                        "files_to_create": ["main.py"],
+                        "files_to_modify": [],
+                        "files_not_to_modify": ["calculator.py"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (session_dir / "plan.md").write_text("# Plan\n", encoding="utf-8")
+            (session_dir / "plan_constraints_check.json").write_text(
+                json.dumps({"status": "passed"}),
+                encoding="utf-8",
+            )
+
+            context = build_review_context(session_dir)
+
+            self.assertEqual(
+                context["plan"]["expected_behavior"],
+                ["python main.py add 2 3 prints 5"],
+            )
+            self.assertEqual(context["plan"]["acceptance_criteria"], ["Uses argparse"])
+            self.assertEqual(
+                context["plan"]["suggested_verification_commands"],
+                ["python main.py add 2 3"],
+            )
+            self.assertEqual(context["plan_constraints_check"]["status"], "passed")
+            self.assertIn("plan.json", context["evidence_used"])
+            self.assertIn("plan_constraints_check.json", context["evidence_used"])
+
+    def test_build_review_context_legacy_sandbox_test_results(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            session_dir = Path(temporary_directory)
+            (session_dir / "test_results.json").write_text(
+                json.dumps({"mode": "sandbox", "status": "passed"}),
+                encoding="utf-8",
+            )
+
+            context = build_review_context(session_dir)
+
+            self.assertEqual(context["sandbox_test_results"]["status"], "passed")
+            self.assertIsNone(context["working_tree_test_results"])
+
+    def test_build_review_context_legacy_working_tree_test_results(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            session_dir = Path(temporary_directory)
+            (session_dir / "test_results.json").write_text(
+                json.dumps({"mode": "working_tree", "status": "passed"}),
+                encoding="utf-8",
+            )
+
+            context = build_review_context(session_dir)
+
+            self.assertEqual(context["working_tree_test_results"]["status"], "passed")
+            self.assertIsNone(context["sandbox_test_results"])
+
     def test_parse_plain_json(self) -> None:
         review = parse_llm_review_response(
             json.dumps(
@@ -98,6 +163,54 @@ class ReviewWorkflowTests(unittest.TestCase):
         self.assertEqual(review["status"], "informational")
         self.assertEqual(review["verdict"], "appears_ok")
         self.assertEqual(review["risk_level"], "low")
+        self.assertEqual(review["acceptance_criteria_alignment"], "unknown")
+        self.assertEqual(review["verification_evidence"], "unknown")
+
+    def test_parse_plain_json_with_acceptance_and_evidence_fields(self) -> None:
+        review = parse_llm_review_response(
+            json.dumps(
+                {
+                    "verdict": "has_concerns",
+                    "confidence": "medium",
+                    "request_alignment": "partially_aligned",
+                    "acceptance_criteria_alignment": "partially_satisfied",
+                    "verification_evidence": "partial",
+                    "risk_level": "medium",
+                    "summary": "Some criteria need evidence.",
+                    "risks": [],
+                    "concerns": ["Plan commands were not run."],
+                    "suggested_checks": ["Run sandbox tests."],
+                    "missing_evidence": ["sandbox_test_results.json"],
+                    "evidence_used": ["diff.patch"],
+                    "notes": [],
+                }
+            )
+        )
+
+        self.assertEqual(review["acceptance_criteria_alignment"], "partially_satisfied")
+        self.assertEqual(review["verification_evidence"], "partial")
+        self.assertEqual(review["concerns"], ["Plan commands were not run."])
+        self.assertEqual(review["missing_evidence"], ["sandbox_test_results.json"])
+
+    def test_build_semantic_review_prompt_includes_plan_evidence(self) -> None:
+        prompt = build_semantic_review_prompt(
+            {
+                "plan": {
+                    "expected_behavior": ["python main.py add 2 3 prints 5"],
+                    "acceptance_criteria": ["Uses argparse"],
+                    "suggested_verification_commands": ["python main.py add 2 3"],
+                },
+                "sandbox_test_results": {"status": "passed"},
+                "working_tree_test_results": {"status": "not_run"},
+                "plan_constraints_check": {"status": "passed"},
+            }
+        )
+
+        self.assertIn("acceptance_criteria", prompt)
+        self.assertIn("expected_behavior", prompt)
+        self.assertIn("suggested_verification_commands", prompt)
+        self.assertIn("sandbox_test_results", prompt)
+        self.assertIn("working_tree_test_results", prompt)
 
     def test_parse_json_inside_markdown(self) -> None:
         raw = """Here is the review:

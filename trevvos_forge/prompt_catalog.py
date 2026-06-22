@@ -166,6 +166,80 @@ Pedido do usuário:
 {instruction}
 """,
     ),
+    "plan_retry": PromptTemplate(
+        name="plan_retry",
+        version="1.0.0",
+        description="Retries structured JSON technical planning after an invalid plan response.",
+        template="""
+Voce e a Trevvos Forge, uma assistente local de engenharia de software.
+
+A tentativa anterior de plan falhou. A resposta anterior nao continha JSON valido ou violou o schema esperado.
+
+Return ONLY valid JSON.
+Do not use Markdown.
+Do not use a code block.
+Do not add comments outside the JSON.
+Preserve the original user request.
+Use behavior-first planning.
+
+The JSON must match the same schema as plan_change_json.
+Include all required fields:
+- summary
+- project_reading
+- files_involved
+- expected_behavior
+- acceptance_criteria
+- suggested_verification_commands
+- files_to_create
+- files_to_modify
+- files_not_to_modify
+- steps
+- risks
+- next_command
+
+Behavior-first planning rules:
+- Include expected_behavior with observable examples.
+- Include acceptance_criteria with verifiable outcomes.
+- Include suggested_verification_commands with executable commands when possible.
+- Separate files_to_create, files_to_modify, and files_not_to_modify.
+- If the user asks for a CLI, treat CLI as an executable command interface.
+- For a simple Python CLI, prefer argparse, a main() function, if __name__ == "__main__": main(), subcommands registered before parse_args(), and dispatch inside main().
+
+Expected JSON shape:
+
+{{
+  "summary": "Short summary.",
+  "project_reading": "Short technical reading of the project.",
+  "files_involved": [
+    "main.py"
+  ],
+  "expected_behavior": [
+    "Observable expected behavior."
+  ],
+  "acceptance_criteria": [
+    "Verifiable acceptance criterion."
+  ],
+  "suggested_verification_commands": [
+    "python -m unittest discover -s tests"
+  ],
+  "files_to_create": [],
+  "files_to_modify": [
+    "main.py"
+  ],
+  "files_not_to_modify": [],
+  "steps": [
+    "Technical step."
+  ],
+  "risks": [
+    "Risk or constraint."
+  ],
+  "next_command": "trevvos diff"
+}}
+
+Retry context:
+{retry_context}
+""",
+    ),
     "diff_generation": PromptTemplate(
         name="diff_generation",
         version="1.0.0",
@@ -238,6 +312,22 @@ Nao copie numeros de linha do contexto para o conteudo final.
 Nao concatene o texto novo em um paragrafo existente quando a intencao for inserir abaixo, depois, antes ou em nova linha.
 Prefira "mode": "operation_based_edit" para alteracoes locais.
 Use "mode": "full_file_rewrite" somente quando uma operacao local nao for suficiente.
+Allowed modes:
+- operation_based_edit
+- full_file_rewrite
+
+Allowed operations when mode is operation_based_edit:
+- insert_after_heading
+- insert_after_line
+- insert_before_line
+- replace_exact_text
+- replace_block
+- append_to_file
+- create_file
+
+Never use full_file_rewrite as an operation.
+If you need to rewrite a whole file, set mode to full_file_rewrite and provide content.
+Do not invent operation names.
 Small-file rewrite policy:
 - For small files (<= 120 lines) with structural changes, prefer controlled full_file_rewrite or a wide replace_block.
 - Avoid multiple append_to_file or insert_after_line operations to reorganize a small file.
@@ -356,9 +446,36 @@ Formato legado ainda aceito para reescrita completa:
   ]
 }}
 
+Exemplo correto de full_file_rewrite:
+{{
+  "changes": [
+    {{
+      "path": "main.py",
+      "change_type": "modified",
+      "mode": "full_file_rewrite",
+      "content": "import argparse\\n..."
+    }}
+  ]
+}}
+
+Exemplo incorreto que nunca deve ser usado:
+{{
+  "changes": [
+    {{
+      "path": "main.py",
+      "change_type": "modified",
+      "mode": "operation_based_edit",
+      "operation": "full_file_rewrite"
+    }}
+  ]
+}}
+
+The incorrect example above must never be used.
+
 Regras:
 - "change_type" deve ser "modified" ou "created".
 - "mode" deve ser "operation_based_edit" ou "full_file_rewrite"; se usar operacao local, sempre informe "operation".
+- full_file_rewrite e mode, nao operation.
 - Para arquivos modificados, "content" deve conter o conteudo completo final do arquivo.
 - Para arquivos criados, "content" deve conter o conteudo completo do novo arquivo.
 - Para "insert_after_heading", informe "target" e "insert".
@@ -416,6 +533,11 @@ Regras de retry:
 - Do not omit `changes`.
 - Do not invent an alternate response format.
 - Return valid JSON using the same schema as file_changes_generation.
+- If previous error was unknown_operation, use only the allowed operations below.
+- The previous response may have used an unknown operation: full_file_rewrite. If the intent was to rewrite the whole file, use mode: full_file_rewrite with content.
+- Never use full_file_rewrite as an operation.
+- If you need to rewrite a whole file, set mode to full_file_rewrite and provide content.
+- Do not invent operation names.
 - Do not repeat invalid target.
 - Nao repita a mesma operacao invalida.
 - Se o erro anterior foi target_not_found, nao use o mesmo target inexistente.
@@ -444,9 +566,22 @@ Schema JSON:
   ]
 }}
 
+Allowed modes:
+- operation_based_edit
+- full_file_rewrite
+
+Allowed operations when mode is operation_based_edit:
+- insert_after_heading
+- insert_after_line
+- insert_before_line
+- replace_exact_text
+- replace_block
+- append_to_file
+- create_file
+
 Operacoes aceitas:
 - operation_based_edit com insert_after_heading, insert_after_line, insert_before_line, replace_exact_text, replace_block, append_to_file, create_file.
-- full_file_rewrite com content completo final do arquivo.
+- full_file_rewrite com content completo final do arquivo, sempre como mode.
 
 Exemplo full_file_rewrite:
 {{
@@ -459,6 +594,20 @@ Exemplo full_file_rewrite:
     }}
   ]
 }}
+
+Exemplo incorreto que nunca deve ser usado:
+{{
+  "changes": [
+    {{
+      "path": "main.py",
+      "change_type": "modified",
+      "mode": "operation_based_edit",
+      "operation": "full_file_rewrite"
+    }}
+  ]
+}}
+
+The incorrect example above must never be used.
 
 Contexto do retry:
 {retry_context}
@@ -540,10 +689,14 @@ Rules:
 - Consider sandbox_test_results, sandbox_test_output.log, working_tree_test_results, and working_tree_test_output.log.
 - Consider semantic_review concerns, llm_review concerns, plan_constraints_check, and warnings.
 - Fix the root cause shown by the evidence, not just the symptom.
+- Generate changes against the current workspace file content, not against the previously proposed patch.
+- All operation targets must exist in the current workspace content provided below.
+- Do not target content that appears only in the failed candidate patch.
 - Preserve files listed in files_not_to_modify.
 - Do not modify files outside files_to_modify or files_to_create unless the evidence clearly requires it.
 - For small files and structural changes, full_file_rewrite or replace_block is allowed.
 - Small-file rewrite policy: for small files (<= 120 lines) with structural or behavioral errors, prefer full_file_rewrite or a wide replace_block.
+- If the current file is small and the repair is structural, prefer mode: full_file_rewrite with complete content.
 - For small Python CLI files using argparse/main, fix the whole file structure: imports at the top, helpers before dispatch, subparsers before parse_args, dispatch inside main(), and the final call inside if __name__ == "__main__": main().
 - Do not patch structural failures by adding more append_to_file edits at the end of a small file.
 - Do not rewrite large files without clear justification.
@@ -551,6 +704,23 @@ Rules:
 - Do not invent lines that do not appear in the current file context.
 - If evidence is insufficient to produce a safe repair, return a structured error JSON instead of inventing changes.
 - Return the same JSON schema as file_changes_generation.
+
+Allowed modes:
+- operation_based_edit
+- full_file_rewrite
+
+Allowed operations when mode is operation_based_edit:
+- insert_after_heading
+- insert_after_line
+- insert_before_line
+- replace_exact_text
+- replace_block
+- append_to_file
+- create_file
+
+Never use full_file_rewrite as an operation.
+If you need to rewrite a whole file, set mode to full_file_rewrite and provide content.
+Do not invent operation names.
 
 Schema:
 {{
@@ -567,6 +737,32 @@ Schema:
     }}
   ]
 }}
+
+Correct full_file_rewrite example:
+{{
+  "changes": [
+    {{
+      "path": "main.py",
+      "change_type": "modified",
+      "mode": "full_file_rewrite",
+      "content": "import argparse\\n..."
+    }}
+  ]
+}}
+
+Incorrect example that must never be used:
+{{
+  "changes": [
+    {{
+      "path": "main.py",
+      "change_type": "modified",
+      "mode": "operation_based_edit",
+      "operation": "full_file_rewrite"
+    }}
+  ]
+}}
+
+The incorrect example above must never be used.
 
 Repair context:
 {repair_context}

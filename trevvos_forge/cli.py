@@ -6,6 +6,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from trevvos_forge.agent_state import determine_agent_state, determine_next_action
 from trevvos_forge.apply_patch import apply_patch, check_patch
 from trevvos_forge.commit_workflow import (
     CommitMessage,
@@ -29,11 +30,13 @@ from trevvos_forge.exceptions import (
     FileChangeOutputError,
     ForgeError,
     RepairNotRepairableError,
+    StructuredOutputError,
     TestRunError,
 )
 from trevvos_forge.file_changes_error_artifacts import write_file_changes_error_artifacts
 from trevvos_forge.file_change_outputs import parse_file_changes_output
 from trevvos_forge.operation_error_artifacts import write_operation_error_artifacts
+from trevvos_forge.plan_error_artifacts import write_plan_error_artifacts
 from trevvos_forge.plan_constraints import (
     build_plan_constraints_prompt_section,
     check_file_changes_against_plan_constraints,
@@ -97,6 +100,8 @@ from trevvos_forge.test_runner import (
     run_test_specs_in_sandbox,
     write_test_artifacts,
 )
+from trevvos_forge.timeline import append_timeline_event, write_timeline_markdown
+from trevvos_forge.work_workflow import build_work_metadata, write_work_artifacts
 from trevvos_forge.workspace import read_workspace_file, scan_workspace
 
 
@@ -250,6 +255,99 @@ def _delete_session_files(session_path: Path, file_names: list[str]) -> None:
 
         if file_path.exists():
             file_path.unlink()
+
+
+def _record_timeline_event(session, event: str, command: str, status: str, **fields) -> None:
+    if session is None:
+        return
+
+    try:
+        payload = {
+            "event": event,
+            "command": command,
+            "status": status,
+            "session_id": session.metadata.id,
+            **fields,
+        }
+        append_timeline_event(session.path, payload)
+        write_timeline_markdown(session.path)
+    except Exception:
+        return
+
+
+def _build_plan_retry_context(session) -> str:
+    error = _read_json_file(session.path / "plan_error.json")
+    user_request = _read_optional_text(session.path / "user_request.txt")
+    prompt = _read_optional_text(session.path / "prompt.md")
+    raw_response = _read_optional_text(session.path / "plan_raw_response.md")
+    context = _read_optional_text(session.path / "context.md")
+
+    return "\n\n".join(
+        [
+            "Original user request:",
+            user_request or "",
+            "Previous plan error:",
+            json.dumps(error, indent=2, ensure_ascii=False) if isinstance(error, dict) else "",
+            "Previous raw response:",
+            raw_response or "",
+            "Previous prompt:",
+            prompt or "",
+            "Workspace context:",
+            context or "",
+        ]
+    )
+
+
+def _read_optional_text(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
+def _read_json_file(path: Path):
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
+def _plan_retry_count(session) -> int:
+    metadata = _read_json_file(session.path / "plan_retry_metadata.json")
+    if isinstance(metadata, dict) and isinstance(metadata.get("retry_count"), int):
+        return metadata["retry_count"] + 1
+    return 1
+
+
+def _write_plan_retry_metadata(
+    session,
+    *,
+    retry_count: int,
+    previous_error_type: str | None,
+    status: str,
+) -> None:
+    write_session_json(
+        session,
+        "plan_retry_metadata.json",
+        {
+            "retry": True,
+            "retry_count": retry_count,
+            "previous_error_type": previous_error_type,
+            "prompt": "plan_retry@1.0.0",
+            "status": status,
+        },
+    )
+
+
+def _clear_plan_error_artifacts(session) -> None:
+    _delete_session_files(
+        session.path,
+        [
+            "plan_error.json",
+            "plan_error.md",
+        ],
+    )
 
 
 @app.command()
@@ -634,13 +732,320 @@ def status(
         raise typer.Exit(code=1)
 
 
+@app.command("next")
+def next_command(
+    session_id: Annotated[
+        str | None,
+        typer.Option("--session", "-s", help="Session ID to use. Defaults to current session."),
+    ] = None,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print next action as JSON."),
+    ] = False,
+) -> None:
+    """
+    Show the next recommended command for the current Forge session.
+    """
+    try:
+        workspace_root = path.resolve()
+
+        if session_id:
+            session = get_session(root=workspace_root, session_id=session_id)
+        else:
+            session = get_current_session(workspace_root)
+
+        agent_state = determine_agent_state(session.path)
+        next_action = determine_next_action(agent_state)
+        payload = {
+            "session_id": agent_state.session_id,
+            "phase": agent_state.phase,
+            "status": agent_state.status,
+            "next_action": next_action.to_dict(),
+            "blockers": agent_state.blockers,
+            "warnings": agent_state.warnings,
+        }
+
+        if json_output:
+            console.print_json(json.dumps(payload, ensure_ascii=False))
+            return
+
+        console.print("[bold]Next recommended command:[/bold]")
+        console.print(next_action.command or "None")
+        console.print("\n[bold]Reason:[/bold]")
+        console.print(next_action.reason or "Session complete.")
+        console.print("\n[bold]State:[/bold]")
+        console.print(f"  Phase:      {agent_state.phase}")
+        console.print(f"  Confidence: {agent_state.confidence}")
+
+        if agent_state.blockers:
+            console.print("\n[bold]Blockers[/bold]")
+            for blocker in agent_state.blockers:
+                console.print(f"  - {blocker}")
+
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
 @app.command()
-def plan(
+def work(
     instruction: str,
     path: Annotated[
         Path,
         typer.Option("--path", "-p", help="Workspace root path."),
     ] = Path("."),
+    max_retries: Annotated[
+        int,
+        typer.Option("--max-retries", help="Maximum diff retry attempts."),
+    ] = 2,
+    max_plan_retries: Annotated[
+        int,
+        typer.Option("--max-plan-retries", help="Maximum plan retry attempts."),
+    ] = 2,
+    max_repairs: Annotated[
+        int,
+        typer.Option("--max-repairs", help="Maximum repair attempts."),
+    ] = 2,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Run non-interactively where confirmations would be required."),
+    ] = False,
+    max_files: Annotated[
+        int,
+        typer.Option("--max-files", help="Maximum number of files to include in planning context."),
+    ] = 5,
+    max_chars: Annotated[
+        int,
+        typer.Option("--max-chars", help="Maximum total characters in planning context."),
+    ] = 16_000,
+) -> None:
+    """
+    Run a controlled agent loop until the session is ready to apply.
+    """
+    workspace_root = path.resolve()
+    session = None
+    steps: list[dict] = []
+    plan_retries_used = 0
+    retries_used = 0
+    repairs_used = 0
+    force_action: str | None = None
+
+    def current_session():
+        return get_current_session(workspace_root)
+
+    def finish(status: str, state, reason: str | None = None, exit_code: int = 0) -> None:
+        metadata = build_work_metadata(
+            request=instruction,
+            status=status,
+            max_retries=max_retries,
+            max_repairs=max_repairs,
+            max_plan_retries=max_plan_retries,
+            retries_used=retries_used,
+            repairs_used=repairs_used,
+            plan_retries_used=plan_retries_used,
+            final_phase=state.phase if state is not None else "unknown",
+            next_command=state.next_command if state is not None else None,
+            steps=steps,
+            reason=reason,
+        )
+        if session is not None:
+            write_work_artifacts(session, metadata)
+            _record_timeline_event(
+                session,
+                "work_ready_to_apply" if status == "ready_to_apply" else "work_blocked",
+                "trevvos work",
+                "succeeded" if status == "ready_to_apply" else "failed",
+                reason=reason,
+                artifacts=["work_metadata.json", "work_summary.md"],
+                next_recommended_command=metadata.get("next_command"),
+            )
+            _record_timeline_event(
+                session,
+                "work_stopped",
+                "trevvos work",
+                "succeeded" if exit_code == 0 else "failed",
+                reason=reason,
+                artifacts=["work_metadata.json", "work_summary.md"],
+                next_recommended_command=metadata.get("next_command"),
+            )
+
+        if status == "ready_to_apply":
+            console.print("[green]Work reached ready_to_apply.[/green]")
+            console.print("Next: trevvos apply")
+        else:
+            console.print(f"[red]{reason or 'Work stopped.'}[/red]")
+            if state is not None and state.next_command:
+                console.print(f"Next: {state.next_command}")
+
+        if exit_code:
+            raise typer.Exit(code=exit_code)
+
+    def run_step(step_name: str, callable_step) -> bool:
+        nonlocal session
+        if session is not None:
+            _record_timeline_event(
+                session,
+                "work_step_started",
+                "trevvos work",
+                "started",
+                message=step_name,
+            )
+        try:
+            callable_step()
+        except typer.Exit as exc:
+            code = exc.exit_code if isinstance(exc.exit_code, int) else 1
+            step = {"step": step_name, "status": "failed", "exit_code": code}
+            steps.append(step)
+            if session is None:
+                try:
+                    session = current_session()
+                except ForgeError:
+                    session = None
+            if session is not None:
+                state = determine_agent_state(session.path)
+                if state.reason:
+                    step["reason"] = state.phase
+                _record_timeline_event(
+                    session,
+                    "work_step_failed",
+                    "trevvos work",
+                    "failed",
+                    reason=step.get("reason"),
+                    message=step_name,
+                )
+            return False
+
+        if session is None:
+            session = current_session()
+        steps.append({"step": step_name, "status": "succeeded"})
+        _record_timeline_event(
+            session,
+            "work_step_completed",
+            "trevvos work",
+            "succeeded",
+            message=step_name,
+        )
+        return True
+
+    try:
+        if max_retries < 0 or max_repairs < 0 or max_plan_retries < 0:
+            raise DiffError("--max-retries, --max-plan-retries, and --max-repairs must be zero or greater.")
+
+        console.print("[bold]Starting Trevvos work loop...[/bold]\n")
+        if not run_step(
+            "plan",
+            lambda: plan(
+                instruction=instruction,
+                path=workspace_root,
+                max_files=max_files,
+                max_chars=max_chars,
+            ),
+        ):
+            if session is not None:
+                state = determine_agent_state(session.path)
+                if state.next_action != "retry_plan":
+                    finish("blocked", state, "Plan failed.", exit_code=1)
+                    return
+            else:
+                raise DiffError("Plan failed before a session was created.")
+        session = current_session()
+        _record_timeline_event(
+            session,
+            "work_started",
+            "trevvos work",
+            "started",
+            message=instruction,
+        )
+
+        while True:
+            state = determine_agent_state(session.path)
+
+            if state.phase == "ready_to_apply":
+                finish("ready_to_apply", state)
+                return
+
+            if state.phase == "blocked":
+                finish("blocked", state, state.reason or "Work blocked.", exit_code=1)
+                return
+
+            action = force_action or state.next_action
+            force_action = None
+
+            if action == "diff":
+                run_step("diff", lambda: diff(path=workspace_root, retry=False))
+                continue
+
+            if action == "retry_plan":
+                if plan_retries_used >= max_plan_retries:
+                    finish("blocked", state, "max_plan_retries_reached", exit_code=1)
+                    return
+                plan_retries_used += 1
+                run_step("plan_retry", lambda: plan(instruction=None, path=workspace_root, retry=True))
+                continue
+
+            if action == "retry_diff":
+                if retries_used >= max_retries:
+                    finish("blocked", state, "Diff retry limit reached.", exit_code=1)
+                    return
+                retries_used += 1
+                run_step("diff_retry", lambda: diff(path=workspace_root, retry=True))
+                continue
+
+            if action == "test_sandbox":
+                run_step(
+                    "sandbox_test",
+                    lambda: test(
+                        path=workspace_root,
+                        yes=True or yes,
+                        sandbox=True,
+                        plan_commands=True,
+                    ),
+                )
+                continue
+
+            if action == "review":
+                run_step("review", lambda: review(path=workspace_root, no_llm=True))
+                continue
+
+            if action == "repair":
+                if repairs_used >= max_repairs:
+                    finish("blocked", state, "Repair limit reached.", exit_code=1)
+                    return
+                repairs_used += 1
+                if run_step("repair", lambda: repair(path=workspace_root)):
+                    force_action = "test_sandbox"
+                continue
+
+            finish("blocked", state, state.reason or "No safe automatic work action is available.", exit_code=1)
+            return
+
+    except ForgeError as exc:
+        if session is not None:
+            state = determine_agent_state(session.path)
+            finish("blocked", state, str(exc), exit_code=1)
+            return
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def plan(
+    instruction: Annotated[
+        str | None,
+        typer.Argument(help="Change request. Omit when using --retry."),
+    ] = None,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+    retry: Annotated[
+        bool,
+        typer.Option("--retry", help="Retry planning from plan_error.json in the current session."),
+    ] = False,
     max_files: Annotated[
         int,
         typer.Option("--max-files", help="Maximum number of files to include in context."),
@@ -659,10 +1064,131 @@ def plan(
         settings = load_settings()
         provider = build_provider(settings)
 
+        if retry:
+            session = get_current_session(path)
+            plan_error = _read_json_file(session.path / "plan_error.json")
+            if not isinstance(plan_error, dict):
+                raise DiffError("No plan_error.json found for current session.")
+
+            retry_count = _plan_retry_count(session)
+            previous_error_type = (
+                plan_error.get("error_type") if isinstance(plan_error.get("error_type"), str) else None
+            )
+            prompt_template = get_prompt("plan_retry")
+            prompt = prompt_template.render(retry_context=_build_plan_retry_context(session))
+
+            write_session_text(session=session, file_name="plan_retry_prompt.md", content=prompt)
+            _record_timeline_event(
+                session,
+                "plan_retry_started",
+                "trevvos plan --retry",
+                "started",
+                reason=previous_error_type,
+            )
+
+            with console.status("[bold]Retrying plan with your local LLM...[/bold]", spinner="dots"):
+                raw_plan_response = provider.generate(prompt)
+
+            write_session_text(
+                session=session,
+                file_name="plan_raw_response.md",
+                content=raw_plan_response,
+            )
+
+            try:
+                plan_output = parse_plan_output(raw_plan_response)
+            except StructuredOutputError as exc:
+                artifact = write_plan_error_artifacts(session, str(exc))
+                _write_plan_retry_metadata(
+                    session,
+                    retry_count=retry_count,
+                    previous_error_type=previous_error_type,
+                    status="failed",
+                )
+                update_session_status(session, "plan_failed")
+                _record_timeline_event(
+                    session,
+                    "plan_retry_failed",
+                    "trevvos plan --retry",
+                    "failed",
+                    reason=artifact.error_type,
+                    message=artifact.message,
+                    artifacts=["plan_raw_response.md", "plan_error.json", "plan_error.md", "plan_retry_metadata.json"],
+                    next_recommended_command="trevvos plan --retry",
+                )
+                _record_timeline_event(
+                    session,
+                    "plan_failed",
+                    "trevvos plan --retry",
+                    "failed",
+                    reason=artifact.error_type,
+                    message=artifact.message,
+                    artifacts=["plan_error.json", "plan_error.md"],
+                    next_recommended_command="trevvos plan --retry",
+                )
+                print_error(str(exc))
+                console.print("\n[bold]Saved error artifacts[/bold]")
+                console.print(f"  - {session.path / 'plan_raw_response.md'}")
+                console.print(f"  - {session.path / 'plan_error.json'}")
+                console.print(f"  - {session.path / 'plan_error.md'}")
+                raise typer.Exit(code=1)
+
+            write_session_json(session=session, file_name="plan.json", data=plan_output.to_dict())
+            plan_markdown = plan_output.to_markdown()
+            write_session_text(session=session, file_name="plan.md", content=plan_markdown)
+            _clear_plan_error_artifacts(session)
+            _write_plan_retry_metadata(
+                session,
+                retry_count=retry_count,
+                previous_error_type=previous_error_type,
+                status="succeeded",
+            )
+            session = update_session_status(session, "planned")
+            _record_timeline_event(
+                session,
+                "plan_retry_completed",
+                "trevvos plan --retry",
+                "succeeded",
+                reason=previous_error_type,
+                artifacts=["plan_raw_response.md", "plan.json", "plan.md", "plan_retry_metadata.json"],
+                next_recommended_command="trevvos diff",
+            )
+            _record_timeline_event(
+                session,
+                "plan_completed",
+                "trevvos plan --retry",
+                "succeeded",
+                artifacts=["plan_raw_response.md", "plan.json", "plan.md", "plan_retry_metadata.json"],
+                next_recommended_command="trevvos diff",
+            )
+
+            console.print("[green]Plan retry succeeded.[/green]\n")
+            console.print(f"Session:        [bold]{session.metadata.id}[/bold]")
+            console.print(f"Status:         {session.metadata.status}")
+            console.print(f"Prompt:         {prompt_template.ref}")
+            console.print("\n[bold]Saved files[/bold]")
+            console.print(f"  - {session.path / 'plan_raw_response.md'}")
+            console.print(f"  - {session.path / 'plan.json'}")
+            console.print(f"  - {session.path / 'plan.md'}")
+            console.print(f"  - {session.path / 'plan_retry_metadata.json'}")
+            console.print("\n[bold]Next[/bold]")
+            console.print("  trevvos diff")
+            return
+
+        if not instruction:
+            raise DiffError('Missing plan instruction. Use trevvos plan "..." or trevvos plan --retry.')
+
         session = create_session(
             root=path,
             user_request=instruction,
             command="plan",
+        )
+        _record_timeline_event(
+            session,
+            "plan_started",
+            "trevvos plan",
+            "started",
+            next_recommended_command=None,
         )
 
         with console.status("[bold]Building project context...[/bold]", spinner="dots"):
@@ -722,7 +1248,28 @@ def plan(
             content=raw_plan_response,
         )
 
-        plan_output = parse_plan_output(raw_plan_response)
+        try:
+            plan_output = parse_plan_output(raw_plan_response)
+        except StructuredOutputError as exc:
+            artifact = write_plan_error_artifacts(session, str(exc))
+            update_session_status(session, "plan_failed")
+            _record_timeline_event(
+                session,
+                "plan_failed",
+                "trevvos plan",
+                "failed",
+                reason=artifact.error_type,
+                message=artifact.message,
+                artifacts=["plan_raw_response.md", "plan_error.json", "plan_error.md"],
+                next_recommended_command="trevvos plan --retry",
+            )
+            console.print("[red]Plan failed.[/red]")
+            print_error(str(exc))
+            console.print("\n[bold]Saved error artifacts[/bold]")
+            console.print(f"  - {session.path / 'plan_raw_response.md'}")
+            console.print(f"  - {session.path / 'plan_error.json'}")
+            console.print(f"  - {session.path / 'plan_error.md'}")
+            raise typer.Exit(code=1)
 
         write_session_json(
             session=session,
@@ -739,6 +1286,22 @@ def plan(
         )
 
         session = update_session_status(session, "planned")
+        _record_timeline_event(
+            session,
+            "plan_completed",
+            "trevvos plan",
+            "succeeded",
+            artifacts=[
+                "context.md",
+                "selected_files.json",
+                "prompt.md",
+                "prompt_metadata.json",
+                "plan_raw_response.md",
+                "plan.json",
+                "plan.md",
+            ],
+            next_recommended_command="trevvos diff",
+        )
 
         console.print("[green]Plan created.[/green]\n")
         console.print(f"Session:        [bold]{session.metadata.id}[/bold]")
@@ -779,6 +1342,15 @@ def plan(
                 content=str(exc),
             )
             update_session_status(session, "plan_failed")
+            _record_timeline_event(
+                session,
+                "plan_failed",
+                "trevvos plan --retry" if retry else "trevvos plan",
+                "failed",
+                reason=type(exc).__name__,
+                message=str(exc),
+                artifacts=["error.txt"],
+            )
 
         print_error(str(exc))
         raise typer.Exit(code=1)
@@ -827,6 +1399,14 @@ def diff(
 
         if not plan_path.exists():
             raise DiffError("Session is missing plan.md. Run trevvos plan before trevvos diff.")
+
+        timeline_command = "trevvos diff --retry" if retry else "trevvos diff"
+        _record_timeline_event(
+            session,
+            "diff_retry_started" if retry else "diff_started",
+            timeline_command,
+            "started",
+        )
 
         instruction = read_session_text(session, "user_request.txt")
         workspace_context = read_session_text(session, "context.md")
@@ -913,6 +1493,15 @@ def diff(
         if plan_constraints_check["status"] == "failed":
             violations = plan_constraints_check.get("violations", [])
             detail = violations[0] if violations else "plan constraints were violated."
+            _record_timeline_event(
+                session,
+                "plan_constraints_failed",
+                timeline_command,
+                "failed",
+                reason="plan_constraints_failed",
+                message=str(detail),
+                artifacts=["plan_constraints_check.json"],
+            )
             raise DiffError(f"Diff rejected: file {detail}")
 
         diff_warnings: list[str] = []
@@ -1017,6 +1606,25 @@ def diff(
             write_retry_metadata(session, retry_metadata)
 
         session = update_session_status(session, "diff_validated")
+        _record_timeline_event(
+            session,
+            "diff_retry_completed" if retry else "diff_completed",
+            timeline_command,
+            "succeeded",
+            artifacts=[
+                "file_changes_raw_response.json",
+                "file_changes.json",
+                "plan_constraints_check.json",
+                "diff.patch",
+                "diff_validation.json",
+                "diff_check.json",
+                "change_summary.md",
+                "semantic_review.json",
+            ],
+            files_changed=[change.path for change in file_changes.changes],
+            warnings_count=len(diff_warnings),
+            next_recommended_command="trevvos apply",
+        )
 
         if retry:
             console.print("\n[green]Retry generated a new diff successfully.[/green]\n")
@@ -1084,6 +1692,32 @@ def diff(
                 retry_metadata["status"] = "failed"
                 write_retry_metadata(session, retry_metadata)
             update_session_status(session, "diff_generation_failed")
+            reason = (
+                "invalid_file_changes_schema"
+                if "Missing or invalid list field: changes" in str(exc)
+                else "invalid_file_changes_output"
+            )
+            command_name = "trevvos diff --retry" if retry else "trevvos diff"
+            _record_timeline_event(
+                session,
+                "file_changes_error",
+                command_name,
+                "failed",
+                reason=reason,
+                message=str(exc),
+                artifacts=["file_changes_error.json", "file_changes_error.md"],
+                next_recommended_command="trevvos diff --retry",
+            )
+            _record_timeline_event(
+                session,
+                "diff_retry_failed" if retry else "diff_failed",
+                command_name,
+                "failed",
+                reason=reason,
+                message=str(exc),
+                artifacts=["file_changes_error.json", "file_changes_error.md"],
+                next_recommended_command="trevvos diff --retry",
+            )
 
         if retry:
             console.print("\n[red]Retry failed.[/red]")
@@ -1105,6 +1739,15 @@ def diff(
                 retry_metadata["status"] = "failed"
                 write_retry_metadata(session, retry_metadata)
             update_session_status(session, "diff_validation_failed")
+            _record_timeline_event(
+                session,
+                "diff_retry_failed" if retry else "diff_failed",
+                "trevvos diff --retry" if retry else "trevvos diff",
+                "failed",
+                reason="diff_validation_failed",
+                message=str(exc),
+                artifacts=["diff_validation_error.txt"],
+            )
 
         if retry:
             console.print("\n[red]Retry failed.[/red]")
@@ -1127,6 +1770,15 @@ def diff(
                 retry_metadata["status"] = "failed"
                 write_retry_metadata(session, retry_metadata)
             update_session_status(session, "diff_check_failed")
+            _record_timeline_event(
+                session,
+                "diff_retry_failed" if retry else "diff_failed",
+                "trevvos diff --retry" if retry else "trevvos diff",
+                "failed",
+                reason="git_apply_check_failed",
+                message=message,
+                artifacts=["diff_check_error.txt"],
+            )
 
         if retry:
             console.print("\n[red]Retry failed.[/red]")
@@ -1146,6 +1798,28 @@ def diff(
                 retry_metadata["status"] = "failed"
                 write_retry_metadata(session, retry_metadata)
             update_session_status(session, "diff_generation_failed")
+            command_name = "trevvos diff --retry" if retry else "trevvos diff"
+            if not retry or retry_context_loaded:
+                _record_timeline_event(
+                    session,
+                    "operation_error",
+                    command_name,
+                    "failed",
+                    reason="operation_error",
+                    message=str(exc),
+                    artifacts=["operation_error.json", "operation_error.md"],
+                    next_recommended_command="trevvos diff --retry",
+                )
+            _record_timeline_event(
+                session,
+                "diff_retry_failed" if retry else "diff_failed",
+                command_name,
+                "failed",
+                reason="diff_generation_failed",
+                message=str(exc),
+                artifacts=["diff_error.txt"],
+                next_recommended_command="trevvos diff --retry",
+            )
 
         if retry:
             console.print("\n[red]Retry failed.[/red]")
@@ -1197,6 +1871,12 @@ def repair(
             session = get_current_session(workspace_root)
 
         console.print("[bold]Repairing diff from session evidence...[/bold]\n")
+        _record_timeline_event(
+            session,
+            "repair_started",
+            "trevvos repair",
+            "started",
+        )
 
         repair_context = build_repair_context(
             session=session,
@@ -1339,6 +2019,25 @@ def repair(
         )
 
         session = update_session_status(session, "diff_validated")
+        _record_timeline_event(
+            session,
+            "repair_completed",
+            "trevvos repair",
+            "succeeded",
+            reason=repair_context.get("reason"),
+            artifacts=[
+                "repair_metadata.json",
+                "repair_prompt.md",
+                "repair_raw_response.json",
+                "file_changes.json",
+                "diff.patch",
+                "semantic_review.json",
+            ],
+            files_changed=[change.path for change in file_changes.changes],
+            warnings_count=len(diff_warnings),
+            repair_count=repair_metadata.get("repair_count"),
+            next_recommended_command="trevvos test --sandbox",
+        )
 
         console.print("[green]Repair generated a new diff successfully.[/green]\n")
         console.print(f"Session: {session.metadata.id}")
@@ -1373,6 +2072,16 @@ def repair(
         if session is not None:
             write_repair_metadata(session, build_not_repairable_metadata(session))
             update_session_status(session, "diff_generation_failed")
+            _record_timeline_event(
+                session,
+                "repair_not_repairable",
+                "trevvos repair",
+                "not_repairable",
+                reason="missing_valid_diff",
+                message=str(exc),
+                artifacts=["repair_metadata.json"],
+                next_recommended_command="trevvos diff --retry",
+            )
 
         console.print("\n[red]Repair failed.[/red]")
         print_error(str(exc))
@@ -1402,6 +2111,16 @@ def repair(
             write_session_text(session=session, file_name="diff_error.txt", content=error_message)
             write_operation_error_artifacts(session, error_message)
             update_session_status(session, "diff_generation_failed")
+            _record_timeline_event(
+                session,
+                "repair_failed",
+                "trevvos repair",
+                "failed",
+                reason=type(exc).__name__,
+                message=error_message,
+                artifacts=["repair_metadata.json", "diff_error.txt", "operation_error.json", "operation_error.md"],
+                repair_count=repair_metadata.get("repair_count") if repair_metadata else None,
+            )
 
         console.print("\n[red]Repair failed.[/red]")
         print_error(str(exc))
@@ -1442,6 +2161,8 @@ def apply(
             session = get_session(root=workspace_root, session_id=session_id)
         else:
             session = get_current_session(workspace_root)
+
+        _record_timeline_event(session, "apply_started", "trevvos apply", "started")
 
         if session.metadata.status != "diff_validated":
             raise ApplyError(
@@ -1504,6 +2225,13 @@ def apply(
 
         if not yes and not typer.confirm("Apply this patch?", default=False):
             console.print("[yellow]Cancelled.[/yellow]")
+            _record_timeline_event(
+                session,
+                "apply_cancelled",
+                "trevvos apply",
+                "cancelled",
+                reason="user_cancelled",
+            )
             return
 
         result = apply_patch(workspace_root=workspace_root, session=session)
@@ -1515,6 +2243,14 @@ def apply(
         )
 
         session = update_session_status(session, "applied")
+        _record_timeline_event(
+            session,
+            "apply_completed",
+            "trevvos apply",
+            "succeeded",
+            artifacts=["apply_result.json"],
+            next_recommended_command="trevvos test",
+        )
 
         console.print("\n[green]Patch applied successfully.[/green]\n")
         console.print(f"Session: {session.metadata.id}")
@@ -1531,6 +2267,15 @@ def apply(
                 content=str(exc),
             )
             update_session_status(session, "apply_failed")
+            _record_timeline_event(
+                session,
+                "apply_failed",
+                "trevvos apply",
+                "failed",
+                reason=type(exc).__name__,
+                message=str(exc),
+                artifacts=["apply_error.txt"],
+            )
 
         print_error(str(exc))
         raise typer.Exit(code=1)
@@ -1584,6 +2329,17 @@ def test(
         else:
             session = get_current_session(workspace_root)
 
+        test_event_prefix = "sandbox_test" if sandbox else "working_tree_test"
+        test_command_name = "trevvos test --sandbox" if sandbox else "trevvos test"
+        test_mode = "sandbox" if sandbox else "working_tree"
+        _record_timeline_event(
+            session,
+            f"{test_event_prefix}_started",
+            test_command_name,
+            "started",
+            test_mode=test_mode,
+        )
+
         patch_path = session.path / "diff.patch"
 
         if not patch_path.exists():
@@ -1635,6 +2391,27 @@ def test(
                 },
             )
             write_test_artifacts(session.path, result)
+            _record_timeline_event(
+                session,
+                "unsafe_command_blocked",
+                test_command_name,
+                "failed",
+                reason="unsafe_command_blocked",
+                message="Unsafe plan verification command blocked.",
+                artifacts=["test_results.json", "test_output.log"],
+                test_mode=test_mode,
+                test_status=result.status,
+            )
+            _record_timeline_event(
+                session,
+                "sandbox_test_failed",
+                test_command_name,
+                "failed",
+                reason="unsafe_command_blocked",
+                artifacts=["test_results.json", "test_output.log"],
+                test_mode=test_mode,
+                test_status=result.status,
+            )
 
             console.print("[red]Unsafe plan verification command blocked.[/red]\n")
             for unsafe in skipped_unsafe:
@@ -1655,6 +2432,16 @@ def test(
                 skipped_unsafe=skipped_unsafe,
             )
             write_test_artifacts(session.path, result)
+            _record_timeline_event(
+                session,
+                f"{test_event_prefix}_failed",
+                test_command_name,
+                "failed",
+                reason="no_test_commands",
+                artifacts=["test_results.json", "test_output.log"],
+                test_mode=test_mode,
+                test_status=result.status,
+            )
 
             console.print("[yellow]No test commands configured or detected.[/yellow]\n")
             console.print("Configure .trevvos/config.json, for example:")
@@ -1692,6 +2479,14 @@ def test(
 
         if not yes and not typer.confirm(confirmation_prompt, default=False):
             console.print("[yellow]Cancelled.[/yellow]")
+            _record_timeline_event(
+                session,
+                f"{test_event_prefix}_failed",
+                test_command_name,
+                "cancelled",
+                reason="user_cancelled",
+                test_mode=test_mode,
+            )
             return
 
         console.print("\n[bold]Running tests...[/bold]\n")
@@ -1728,6 +2523,22 @@ def test(
             )
 
         write_test_artifacts(session.path, result)
+        _record_timeline_event(
+            session,
+            f"{test_event_prefix}_completed" if result.status == "passed" else f"{test_event_prefix}_failed",
+            test_command_name,
+            "succeeded" if result.status == "passed" else "failed",
+            reason=None if result.status == "passed" else result.status,
+            artifacts=[
+                "sandbox_test_results.json" if sandbox else "working_tree_test_results.json",
+                "sandbox_test_output.log" if sandbox else "working_tree_test_output.log",
+                "test_results.json",
+                "test_output.log",
+            ],
+            test_mode=test_mode,
+            test_status=result.status,
+            next_recommended_command="trevvos review" if result.status == "passed" else "trevvos repair",
+        )
 
         for command_result in result.commands:
             marker = "[green]OK[/green]" if command_result.status == "passed" else "[red]FAIL[/red]"
@@ -1762,6 +2573,16 @@ def test(
                 session=session,
                 file_name="test_error.txt",
                 content=str(exc),
+            )
+            _record_timeline_event(
+                session,
+                "sandbox_test_failed" if sandbox else "working_tree_test_failed",
+                "trevvos test --sandbox" if sandbox else "trevvos test",
+                "failed",
+                reason=type(exc).__name__,
+                message=str(exc),
+                artifacts=["test_error.txt"],
+                test_mode="sandbox" if sandbox else "working_tree",
             )
 
         print_error(str(exc))
@@ -1802,10 +2623,18 @@ def review(
         else:
             session = get_current_session(workspace_root)
 
+        _record_timeline_event(session, "review_started", "trevvos review", "started")
         context = build_review_context(session.path)
 
         if no_llm:
             _print_deterministic_review(session.path, context, reason=None)
+            _record_timeline_event(
+                session,
+                "review_completed",
+                "trevvos review --no-llm",
+                "succeeded",
+                artifacts=["semantic_review.json"],
+            )
             return
 
         if provider_name != "ollama":
@@ -1813,6 +2642,14 @@ def review(
                 session.path,
                 context,
                 reason=f"Unsupported review provider: {provider_name}",
+            )
+            _record_timeline_event(
+                session,
+                "review_completed",
+                "trevvos review",
+                "succeeded",
+                reason="deterministic_fallback",
+                artifacts=["semantic_review.json"],
             )
             return
 
@@ -1833,6 +2670,15 @@ def review(
                 session.path,
                 context,
                 reason=f"LLM semantic review unavailable: {exc}",
+            )
+            _record_timeline_event(
+                session,
+                "review_completed",
+                "trevvos review",
+                "succeeded",
+                reason="deterministic_fallback",
+                message=str(exc),
+                artifacts=["semantic_review.json"],
             )
             return
 
@@ -1884,8 +2730,25 @@ def review(
 
         if raw_text is not None:
             console.print(f"  - llm_review_raw.txt: {session.path / 'llm_review_raw.txt'}")
+        _record_timeline_event(
+            session,
+            "review_completed",
+            "trevvos review",
+            "succeeded",
+            artifacts=["llm_review.md", "llm_review.json"],
+            concerns_count=len(review_payload.get("concerns", [])) if isinstance(review_payload.get("concerns"), list) else 0,
+        )
 
     except ForgeError as exc:
+        if "session" in locals():
+            _record_timeline_event(
+                session,
+                "review_failed",
+                "trevvos review",
+                "failed",
+                reason=type(exc).__name__,
+                message=str(exc),
+            )
         print_error(str(exc))
         raise typer.Exit(code=1)
 
@@ -1971,6 +2834,7 @@ def commit(
         else:
             session = get_current_session(workspace_root)
 
+        _record_timeline_event(session, "commit_started", "trevvos commit", "started")
         manual_message = _manual_commit_message(message) if message else None
 
         if manual_message is not None:
@@ -2005,6 +2869,13 @@ def commit(
                 message_subject=plan.message.subject,
             )
             write_commit_artifacts(session_dir=session.path, plan=plan, result=result)
+            _record_timeline_event(
+                session,
+                "commit_dry_run",
+                "trevvos commit --dry-run",
+                "succeeded",
+                artifacts=["commit_message.txt", "commit_plan.json", "commit_result.json"],
+            )
             console.print("\n[yellow]Dry run only. No files were staged and no commit was created.[/yellow]")
             _print_commit_artifacts(session.path)
             return
@@ -2012,6 +2883,14 @@ def commit(
         if not yes and not typer.confirm("Proceed with commit?", default=False):
             result = CommitResult(status="cancelled")
             write_commit_artifacts(session_dir=session.path, plan=plan, result=result)
+            _record_timeline_event(
+                session,
+                "commit_cancelled",
+                "trevvos commit",
+                "cancelled",
+                reason="user_cancelled",
+                artifacts=["commit_message.txt", "commit_plan.json", "commit_result.json"],
+            )
             console.print("[yellow]Cancelled.[/yellow]")
             return
 
@@ -2023,13 +2902,39 @@ def commit(
         write_commit_artifacts(session_dir=session.path, plan=plan, result=result)
 
         if result.status != "committed":
+            _record_timeline_event(
+                session,
+                "commit_failed",
+                "trevvos commit",
+                "failed",
+                reason="git_commit_failed",
+                message=result.error,
+                artifacts=["commit_message.txt", "commit_plan.json", "commit_result.json"],
+            )
             print_error(result.error or "git commit failed")
             raise typer.Exit(code=1)
 
+        _record_timeline_event(
+            session,
+            "commit_completed",
+            "trevvos commit",
+            "succeeded",
+            artifacts=["commit_message.txt", "commit_plan.json", "commit_result.json"],
+            commit_hash=result.commit_hash,
+        )
         console.print(f"\n[green]Commit created:[/green] {result.commit_hash}")
         _print_commit_artifacts(session.path)
 
     except ForgeError as exc:
+        if "session" in locals():
+            _record_timeline_event(
+                session,
+                "commit_failed",
+                "trevvos commit",
+                "failed",
+                reason=type(exc).__name__,
+                message=str(exc),
+            )
         print_error(str(exc))
         raise typer.Exit(code=1)
 

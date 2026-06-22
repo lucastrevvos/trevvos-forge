@@ -7,6 +7,7 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from trevvos_forge.cli import app
+from trevvos_forge.sessions import create_session
 from trevvos_forge.structured_outputs import PlanOutput, parse_plan_output
 
 
@@ -139,6 +140,66 @@ class PlanCliTests(unittest.TestCase):
             self.assertIn("## Suggested commands to verify", plan_markdown)
             self.assertIn("python main.py add 2 3", plan_markdown)
 
+    def test_plan_saves_plan_error_for_invalid_json(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            provider = _FakeProvider("Aqui esta o plano:\n- faca X")
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(app, ["plan", "Atualize o projeto", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 1)
+            session_dir = next((root / ".trevvos" / "sessions").iterdir())
+            plan_error = json.loads((session_dir / "plan_error.json").read_text(encoding="utf-8"))
+
+            self.assertTrue((session_dir / "plan_error.md").exists())
+            self.assertTrue((session_dir / "plan_raw_response.md").exists())
+            self.assertEqual(plan_error["error_type"], "invalid_plan_json")
+            self.assertEqual(plan_error["raw_response_path"], "plan_raw_response.md")
+            self.assertIn("plan_error.json", result.output)
+            self.assertFalse((session_dir / "plan.json").exists())
+
+    def test_plan_retry_succeeds_from_plan_error(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            provider = _QueueProvider(
+                [
+                    "Aqui esta o plano:\n- faca X",
+                    _valid_plan_response(),
+                ]
+            )
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                initial = runner.invoke(app, ["plan", "Atualize o projeto", "--path", str(root)])
+                retry = runner.invoke(app, ["plan", "--retry", "--path", str(root)])
+
+            self.assertEqual(initial.exit_code, 1, initial.output)
+            self.assertEqual(retry.exit_code, 0, retry.output)
+            session_dir = next((root / ".trevvos" / "sessions").iterdir())
+            retry_metadata = json.loads((session_dir / "plan_retry_metadata.json").read_text(encoding="utf-8"))
+
+            self.assertTrue((session_dir / "plan.json").exists())
+            self.assertTrue((session_dir / "plan.md").exists())
+            self.assertEqual(retry_metadata["status"], "succeeded")
+            self.assertFalse((session_dir / "plan_error.json").exists())
+            self.assertFalse((session_dir / "plan_error.md").exists())
+
+    def test_plan_retry_fails_without_plan_error(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            create_session(root, "Atualize o projeto", command="plan")
+
+            result = runner.invoke(app, ["plan", "--retry", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn("No plan_error.json found for current session", result.output)
+
 
 class _FakeProvider:
     def __init__(self, response: str) -> None:
@@ -146,6 +207,35 @@ class _FakeProvider:
 
     def generate(self, prompt: str) -> str:
         return self.response
+
+
+class _QueueProvider:
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = responses
+
+    def generate(self, prompt: str) -> str:
+        if not self.responses:
+            raise AssertionError("No fake provider responses left.")
+        return self.responses.pop(0)
+
+
+def _valid_plan_response() -> str:
+    return json.dumps(
+        {
+            "summary": "Update project.",
+            "project_reading": "Small project.",
+            "files_involved": ["README.md"],
+            "expected_behavior": ["README is updated."],
+            "acceptance_criteria": ["README contains the requested text."],
+            "suggested_verification_commands": [],
+            "files_to_create": [],
+            "files_to_modify": ["README.md"],
+            "files_not_to_modify": [],
+            "steps": ["Edit README.md."],
+            "risks": [],
+            "next_command": "trevvos diff",
+        }
+    )
 
 
 if __name__ == "__main__":

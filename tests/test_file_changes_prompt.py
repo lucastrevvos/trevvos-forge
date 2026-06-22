@@ -43,6 +43,22 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("do not embed tests in the runtime file", prompt)
         self.assertIn("python -m unittest discover -s tests", prompt)
 
+    def test_plan_retry_prompt_contains_schema_rules(self) -> None:
+        prompt = get_prompt("plan_retry").render(
+            retry_context="retry context",
+        )
+
+        self.assertIn("valid JSON", prompt)
+        self.assertIn("Do not use Markdown", prompt)
+        self.assertIn("behavior-first planning", prompt)
+        self.assertIn("expected_behavior", prompt)
+        self.assertIn("acceptance_criteria", prompt)
+        self.assertIn("suggested_verification_commands", prompt)
+        self.assertIn("files_to_create", prompt)
+        self.assertIn("files_to_modify", prompt)
+        self.assertIn("files_not_to_modify", prompt)
+        self.assertIn("retry context", prompt)
+
     def test_prompt_contains_markdown_editing_rules(self) -> None:
         prompt = get_prompt("file_changes_generation").render(
             workspace_context="context",
@@ -95,6 +111,21 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("subparsers before parse_args", prompt)
         self.assertIn("argparse/main", prompt)
 
+    def test_file_changes_generation_prompt_contains_explicit_modes_and_operations(self) -> None:
+        prompt = get_prompt("file_changes_generation").render(
+            workspace_context="context",
+            plan="plan",
+            plan_constraints="Plan constraints",
+            instruction="instruction",
+        )
+
+        self.assertIn("Allowed modes", prompt)
+        self.assertIn("Allowed operations", prompt)
+        self.assertIn("Never use full_file_rewrite as an operation", prompt)
+        self.assertIn('"mode": "full_file_rewrite"', prompt)
+        self.assertIn("Do not invent operation names", prompt)
+        self.assertIn("The incorrect example above must never be used", prompt)
+
     def test_semantic_patch_review_prompt_contains_safety_rules(self) -> None:
         prompt = get_prompt("semantic_patch_review").render(
             review_context="{}",
@@ -135,6 +166,17 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("Do not omit `changes`", prompt)
         self.assertIn("Return valid JSON", prompt)
 
+    def test_file_changes_retry_prompt_contains_unknown_operation_rules(self) -> None:
+        prompt = get_prompt("file_changes_retry").render(
+            retry_context="retry context",
+        )
+
+        self.assertIn("unknown operation", prompt)
+        self.assertIn("mode: full_file_rewrite", prompt)
+        self.assertIn("top-level `changes`", prompt)
+        self.assertIn("Allowed operations", prompt)
+        self.assertIn("Never use full_file_rewrite as an operation", prompt)
+
     def test_repair_file_changes_prompt_contains_repair_evidence_rules(self) -> None:
         prompt = get_prompt("repair_file_changes").render(
             repair_context="repair context",
@@ -160,6 +202,16 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("replace_block", prompt)
         self.assertIn("Do not patch structural failures by adding more append_to_file", prompt)
         self.assertIn("subparsers before parse_args", prompt)
+
+    def test_repair_file_changes_prompt_contains_working_tree_base_rules(self) -> None:
+        prompt = get_prompt("repair_file_changes").render(
+            repair_context="repair context",
+        )
+
+        self.assertIn("current workspace file content", prompt)
+        self.assertIn("not against the previously proposed patch", prompt)
+        self.assertIn("targets must exist in the current workspace content", prompt)
+        self.assertIn("prefer mode: full_file_rewrite", prompt)
 
     def test_commit_message_prompt_contains_safety_rules(self) -> None:
         prompt = get_prompt("commit_message_generation").render(

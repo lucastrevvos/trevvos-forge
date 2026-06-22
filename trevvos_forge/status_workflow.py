@@ -2,6 +2,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+from trevvos_forge.agent_state import determine_agent_state
+from trevvos_forge.timeline import read_timeline
+
 
 CHECK_LABELS = {
     "plan": "Plan generated",
@@ -35,6 +38,7 @@ def build_session_status(session_dir: Path, repo_root: Path | None = None) -> di
     diff_warnings = _read_json(session_dir / "diff_warnings.json")
     apply_result = _read_json(session_dir / "apply_result.json")
     diff_check = _read_json(session_dir / "diff_check.json")
+    agent_state = determine_agent_state(session_dir)
 
     checks = {
         "plan": _plan_status(session_dir),
@@ -57,6 +61,7 @@ def build_session_status(session_dir: Path, repo_root: Path | None = None) -> di
             legacy_test_results=legacy_test_results,
         ),
         "artifacts": _artifact_details(session_dir),
+        "timeline": read_timeline(session_dir),
     }
     artifacts = _existing_artifacts(session_dir)
     status = {
@@ -67,9 +72,10 @@ def build_session_status(session_dir: Path, repo_root: Path | None = None) -> di
         "warnings": warnings,
         "artifacts": artifacts,
         "details": details,
+        "agent_state": agent_state.to_dict(),
     }
     status["overall_status"] = determine_overall_status(status)
-    status["next_recommended_command"] = determine_next_command(status)
+    status["next_recommended_command"] = agent_state.next_command
 
     return status
 
@@ -175,6 +181,18 @@ def render_status_text(status: dict, verbose: bool = False) -> str:
         lines.extend(f"- {artifact}" for artifact in artifacts)
     else:
         lines.append("- None")
+
+    agent_state = status.get("agent_state")
+    if isinstance(agent_state, dict):
+        lines.extend(
+            [
+                "",
+                "Agent state:",
+                f"  Phase: {agent_state.get('phase', 'unknown')}",
+                f"  Reason: {agent_state.get('reason') or 'None'}",
+                f"  Next: {agent_state.get('next_command') or 'None'}",
+            ]
+        )
 
     if verbose:
         lines.extend(_verbose_lines(status))
@@ -376,6 +394,11 @@ def _artifact_details(session_dir: Path) -> dict:
 def _existing_artifacts(session_dir: Path) -> list[str]:
     artifact_names = [
         "plan.md",
+        "plan_raw_response.md",
+        "plan_error.json",
+        "plan_error.md",
+        "plan_retry_prompt.md",
+        "plan_retry_metadata.json",
         "diff.patch",
         "diff_warnings.json",
         "plan_constraints_check.json",
@@ -397,6 +420,8 @@ def _existing_artifacts(session_dir: Path) -> list[str]:
         "commit_message.txt",
         "commit_plan.json",
         "commit_result.json",
+        "timeline.jsonl",
+        "timeline.md",
     ]
 
     return [artifact for artifact in artifact_names if (session_dir / artifact).exists()]
@@ -409,6 +434,7 @@ def _verbose_lines(status: dict) -> list[str]:
     commit = details.get("commit", {})
     test = details.get("test", {})
     artifacts = details.get("artifacts", {})
+    timeline = details.get("timeline", [])
 
     if review:
         lines.append(f"- Review verdict: {review.get('verdict', 'unknown')}")
@@ -431,6 +457,15 @@ def _verbose_lines(status: dict) -> list[str]:
     if artifacts:
         lines.append("- Artifact paths:")
         lines.extend(f"  - {name}: {path}" for name, path in artifacts.items())
+
+    lines.extend(["", "Timeline:"])
+    if timeline:
+        for event in timeline[-8:]:
+            if not isinstance(event, dict):
+                continue
+            lines.append(_timeline_line(event))
+    else:
+        lines.append("- None")
 
     return lines
 
@@ -461,6 +496,22 @@ def _check_marker(check_name: str, status: str | None) -> str:
         return "OK"
 
     return "--"
+
+
+def _timeline_line(event: dict) -> str:
+    status = event.get("status")
+    marker = "OK" if status == "succeeded" else "!!" if status in {"failed", "not_repairable"} else "--"
+    event_name = event.get("event", "unknown")
+    reason = event.get("reason")
+    test_status = event.get("test_status")
+
+    suffix = ""
+    if reason:
+        suffix = f": {reason}"
+    elif test_status:
+        suffix = f": {test_status}"
+
+    return f"{marker} {event_name}{suffix}"
 
 
 def _allowed_test_status(value: Any) -> str:

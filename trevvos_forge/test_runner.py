@@ -33,8 +33,28 @@ DEFAULT_SANDBOX_IGNORE_NAMES = {
 
 
 @dataclass(frozen=True)
+class CommandSpec:
+    command: str
+    source: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class CommandSafetyResult:
+    command: str
+    is_safe: bool
+    reason: str | None = None
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class TestCommandResult:
     command: str
+    source: str
     exit_code: int | None
     duration_seconds: float
     status: str
@@ -67,15 +87,18 @@ class TestRunResult:
     summary: dict[str, int]
     mode: str = "working_tree"
     sandbox: dict[str, Any] | None = None
+    command_sources: dict[str, list[str]] | None = None
 
     def to_dict(self) -> dict:
         return {
             "mode": self.mode,
             "sandbox": _public_sandbox_metadata(self.sandbox),
             "status": self.status,
+            "command_sources": self.command_sources or _command_sources_from_results(self.commands),
             "commands": [
                 {
                     "command": command.command,
+                    "source": command.source,
                     "exit_code": command.exit_code,
                     "duration_seconds": command.duration_seconds,
                     "status": command.status,
@@ -116,6 +139,95 @@ def load_test_commands(repo_root: Path) -> list[str]:
     return parsed_commands
 
 
+def load_plan_verification_commands(session_dir: Path) -> list[str]:
+    plan_path = session_dir / "plan.json"
+
+    if not plan_path.exists():
+        return []
+
+    try:
+        payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise TestRunError("Invalid JSON in plan.json.") from exc
+
+    if not isinstance(payload, dict):
+        return []
+
+    commands = payload.get("suggested_verification_commands")
+
+    if not isinstance(commands, list):
+        return []
+
+    return [command.strip() for command in commands if isinstance(command, str) and command.strip()]
+
+
+def validate_safe_test_command(command: str) -> CommandSafetyResult:
+    lowered = command.lower()
+    dangerous_patterns = [
+        "rm -rf",
+        "del /s",
+        "curl ",
+        " | sh",
+        "invoke-webrequest",
+        " | iex",
+        "powershell -enc",
+        "git push",
+        "git reset --hard",
+        "&&",
+        "||",
+        ">",
+        ">>",
+    ]
+
+    for pattern in dangerous_patterns:
+        if pattern in lowered:
+            return CommandSafetyResult(command=command, is_safe=False, reason=f"Unsafe command pattern: {pattern}")
+
+    try:
+        parts = _split_command(command)
+    except ValueError:
+        return CommandSafetyResult(command=command, is_safe=False, reason="Invalid command syntax.")
+
+    if not parts:
+        return CommandSafetyResult(command=command, is_safe=False, reason="Empty command.")
+
+    executable = Path(parts[0]).name.lower()
+    allowed = {"python", "python.exe", "pytest", "pytest.exe", "npm", "npm.cmd", "dotnet", "dotnet.exe"}
+
+    if executable not in allowed:
+        return CommandSafetyResult(command=command, is_safe=False, reason=f"Executable is not allowed: {parts[0]}")
+
+    return CommandSafetyResult(command=command, is_safe=True)
+
+
+def merge_test_commands(
+    *,
+    configured: list[str],
+    plan: list[str],
+    selection: str,
+) -> tuple[list[CommandSpec], list[CommandSafetyResult]]:
+    if selection not in {"combined", "plan", "configured"}:
+        raise TestRunError(f"Unsupported command selection: {selection}")
+
+    configured_specs = [CommandSpec(command=command, source="configured") for command in configured]
+    plan_safety = [validate_safe_test_command(command) for command in plan]
+    unsafe_plan = [result for result in plan_safety if not result.is_safe]
+    plan_specs = [
+        CommandSpec(command=result.command, source="plan")
+        for result in plan_safety
+        if result.is_safe
+    ]
+
+    if selection == "plan":
+        specs = plan_specs
+    elif selection == "configured":
+        specs = configured_specs
+    else:
+        specs = configured_specs + plan_specs
+
+    return _dedupe_command_specs(specs), unsafe_plan
+
+
 def detect_test_commands(repo_root: Path) -> list[str]:
     commands: list[str] = []
 
@@ -150,10 +262,30 @@ def run_test_commands(
     mode: str = "working_tree",
     sandbox: dict[str, Any] | None = None,
 ) -> TestRunResult:
+    command_specs = [CommandSpec(command=command, source="configured") for command in commands]
+
+    return run_test_command_specs(
+        command_specs=command_specs,
+        repo_root=repo_root,
+        timeout_seconds=timeout_seconds,
+        mode=mode,
+        sandbox=sandbox,
+    )
+
+
+def run_test_command_specs(
+    *,
+    command_specs: list[CommandSpec],
+    repo_root: Path,
+    timeout_seconds: int,
+    mode: str = "working_tree",
+    sandbox: dict[str, Any] | None = None,
+    skipped_unsafe: list[CommandSafetyResult] | None = None,
+) -> TestRunResult:
     if timeout_seconds <= 0:
         raise TestRunError("Timeout must be greater than zero seconds.")
 
-    if not commands:
+    if not command_specs:
         return TestRunResult(
             status="not_configured",
             commands=[],
@@ -165,13 +297,15 @@ def run_test_commands(
             },
             mode=mode,
             sandbox=sandbox,
+            command_sources=_command_sources_from_specs(command_specs, skipped_unsafe or []),
         )
 
     command_results: list[TestCommandResult] = []
 
-    for command in commands:
+    for spec in command_specs:
         result = _run_single_command(
-            command=command,
+            command=spec.command,
+            source=spec.source,
             repo_root=repo_root,
             timeout_seconds=timeout_seconds,
         )
@@ -186,6 +320,7 @@ def run_test_commands(
         summary=_build_summary(command_results),
         mode=mode,
         sandbox=sandbox,
+        command_sources=_command_sources_from_specs(command_specs, skipped_unsafe or []),
     )
 
 
@@ -265,6 +400,26 @@ def run_tests_in_sandbox(
     timeout_seconds: int,
     keep_sandbox: bool = False,
 ) -> TestRunResult:
+    command_specs = [CommandSpec(command=command, source="configured") for command in commands]
+
+    return run_test_specs_in_sandbox(
+        repo_root=repo_root,
+        patch_path=patch_path,
+        command_specs=command_specs,
+        timeout_seconds=timeout_seconds,
+        keep_sandbox=keep_sandbox,
+    )
+
+
+def run_test_specs_in_sandbox(
+    *,
+    repo_root: Path,
+    patch_path: Path,
+    command_specs: list[CommandSpec],
+    timeout_seconds: int,
+    keep_sandbox: bool = False,
+    skipped_unsafe: list[CommandSafetyResult] | None = None,
+) -> TestRunResult:
     sandbox_root = create_project_sandbox(repo_root)
     sandbox_metadata: dict[str, Any] = {
         "enabled": True,
@@ -301,14 +456,16 @@ def run_tests_in_sandbox(
                 },
                 mode="sandbox",
                 sandbox=sandbox_metadata,
+                command_sources=_command_sources_from_specs(command_specs, skipped_unsafe or []),
             )
 
-        return run_test_commands(
-            commands=commands,
+        return run_test_command_specs(
+            command_specs=command_specs,
             repo_root=sandbox_root,
             timeout_seconds=timeout_seconds,
             mode="sandbox",
             sandbox=sandbox_metadata,
+            skipped_unsafe=skipped_unsafe or [],
         )
     finally:
         if not keep_sandbox:
@@ -331,6 +488,7 @@ def write_test_artifacts(session_dir: Path, result: TestRunResult) -> None:
 def _run_single_command(
     *,
     command: str,
+    source: str,
     repo_root: Path,
     timeout_seconds: int,
 ) -> TestCommandResult:
@@ -351,6 +509,7 @@ def _run_single_command(
     except subprocess.TimeoutExpired as exc:
         return TestCommandResult(
             command=command,
+            source=source,
             exit_code=None,
             duration_seconds=round(time.monotonic() - started_at, 3),
             status="timed_out",
@@ -362,6 +521,7 @@ def _run_single_command(
 
     return TestCommandResult(
         command=command,
+        source=source,
         exit_code=completed.returncode,
         duration_seconds=round(time.monotonic() - started_at, 3),
         status=status,
@@ -464,7 +624,18 @@ def _build_output_log(result: TestRunResult) -> str:
 
     parts.append("")
 
+    command_sources = result.command_sources or {}
+    skipped_unsafe = command_sources.get("skipped_unsafe")
+
+    if isinstance(skipped_unsafe, list) and skipped_unsafe:
+        parts.append("Skipped unsafe commands:")
+        for item in skipped_unsafe:
+            if isinstance(item, dict):
+                parts.append(f"- {item.get('command')}: {item.get('reason')}")
+        parts.append("")
+
     for command in result.commands:
+        parts.append(f"Command source: {command.source}")
         parts.append(f"$ {command.command}")
 
         if command.stdout:
@@ -501,6 +672,47 @@ def _split_command(command: str) -> list[str]:
         parts = [_strip_outer_quotes(part) for part in parts]
 
     return parts
+
+
+def _dedupe_command_specs(command_specs: list[CommandSpec]) -> list[CommandSpec]:
+    seen: set[str] = set()
+    deduped: list[CommandSpec] = []
+
+    for spec in command_specs:
+        if spec.command in seen:
+            continue
+
+        seen.add(spec.command)
+        deduped.append(spec)
+
+    return deduped
+
+
+def _command_sources_from_specs(
+    command_specs: list[CommandSpec],
+    skipped_unsafe: list[CommandSafetyResult],
+) -> dict[str, list]:
+    configured = [spec.command for spec in command_specs if spec.source == "configured"]
+    plan = [spec.command for spec in command_specs if spec.source == "plan"]
+
+    return {
+        "configured": configured,
+        "plan": plan,
+        "executed": [spec.command for spec in command_specs],
+        "skipped_unsafe": [result.to_dict() for result in skipped_unsafe],
+    }
+
+
+def _command_sources_from_results(command_results: list[TestCommandResult]) -> dict[str, list]:
+    configured = [result.command for result in command_results if result.source == "configured"]
+    plan = [result.command for result in command_results if result.source == "plan"]
+
+    return {
+        "configured": configured,
+        "plan": plan,
+        "executed": [result.command for result in command_results],
+        "skipped_unsafe": [],
+    }
 
 
 def _strip_outer_quotes(value: str) -> str:

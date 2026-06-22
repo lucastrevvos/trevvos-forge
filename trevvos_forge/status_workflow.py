@@ -309,6 +309,7 @@ def _test_details(test_results: Any) -> dict:
         "mode": test_results.get("mode", "working_tree"),
         "status": test_results.get("status"),
         "summary": test_results.get("summary"),
+        "command_sources": test_results.get("command_sources"),
     }
 
 
@@ -357,6 +358,19 @@ def _verbose_lines(status: dict) -> list[str]:
     if test:
         lines.append(f"- Test mode: {test.get('mode', 'unknown')}")
         lines.append(f"- Test status: {test.get('status', 'unknown')}")
+        command_sources = test.get("command_sources")
+
+        if isinstance(command_sources, dict):
+            sources = []
+
+            if command_sources.get("configured"):
+                sources.append("configured")
+
+            if command_sources.get("plan"):
+                sources.append("plan")
+
+            if sources:
+                lines.append(f"- Verification commands: {' + '.join(sources)}")
 
     if commit:
         lines.append(f"- Commit hash: {commit.get('hash') or 'not available'}")

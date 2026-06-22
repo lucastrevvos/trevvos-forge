@@ -77,9 +77,12 @@ from trevvos_forge.status_workflow import (
     write_session_status,
 )
 from trevvos_forge.test_runner import (
+    TestRunResult,
     load_test_commands,
-    run_test_commands,
-    run_tests_in_sandbox,
+    load_plan_verification_commands,
+    merge_test_commands,
+    run_test_command_specs,
+    run_test_specs_in_sandbox,
     write_test_artifacts,
 )
 from trevvos_forge.workspace import read_workspace_file, scan_workspace
@@ -1264,6 +1267,14 @@ def test(
         bool,
         typer.Option("--keep-sandbox", help="Keep the sandbox directory after running tests."),
     ] = False,
+    plan_commands: Annotated[
+        bool,
+        typer.Option("--plan-commands", help="Use only suggested_verification_commands from plan.json."),
+    ] = False,
+    configured_commands: Annotated[
+        bool,
+        typer.Option("--configured-commands", help="Use only configured or autodetected test commands."),
+    ] = False,
 ) -> None:
     """
     Run configured validation commands against the current workspace state.
@@ -1283,15 +1294,70 @@ def test(
         if not patch_path.exists():
             raise TestRunError("Cannot test: diff.patch not found in session. Run trevvos diff first.")
 
-        commands = load_test_commands(workspace_root)
+        if plan_commands and configured_commands:
+            raise TestRunError("Use only one of --plan-commands or --configured-commands.")
 
-        if not commands:
-            result = run_test_commands(
+        configured = load_test_commands(workspace_root)
+        plan = load_plan_verification_commands(session.path)
+        selection = "configured"
+
+        if plan_commands:
+            selection = "plan"
+        elif configured_commands:
+            selection = "configured"
+        elif sandbox:
+            selection = "combined"
+
+        command_specs, skipped_unsafe = merge_test_commands(
+            configured=configured,
+            plan=plan,
+            selection=selection,
+        )
+
+        if sandbox and skipped_unsafe:
+            result = TestRunResult(
+                status="failed",
                 commands=[],
+                summary={
+                    "total": 0,
+                    "passed": 0,
+                    "failed": 1,
+                    "timed_out": 0,
+                },
+                mode="sandbox",
+                sandbox={
+                    "enabled": True,
+                    "kept": False,
+                    "path": None,
+                    "patch_apply_check": "not_run",
+                    "patch_apply": "not_run",
+                },
+                command_sources={
+                    "configured": [spec.command for spec in command_specs if spec.source == "configured"],
+                    "plan": [spec.command for spec in command_specs if spec.source == "plan"],
+                    "executed": [],
+                    "skipped_unsafe": [unsafe.to_dict() for unsafe in skipped_unsafe],
+                },
+            )
+            write_test_artifacts(session.path, result)
+
+            console.print("[red]Unsafe plan verification command blocked.[/red]\n")
+            for unsafe in skipped_unsafe:
+                console.print(f"  - {unsafe.command}: {unsafe.reason}")
+
+            console.print("\n[bold]Artifacts[/bold]")
+            console.print(f"  - test_results.json: {session.path / 'test_results.json'}")
+            console.print(f"  - test_output.log: {session.path / 'test_output.log'}")
+            raise typer.Exit(code=1)
+
+        if not command_specs:
+            result = run_test_command_specs(
+                command_specs=[],
                 repo_root=workspace_root,
                 timeout_seconds=timeout,
                 mode="sandbox" if sandbox else "working_tree",
                 sandbox={"enabled": True, "kept": False, "path": None} if sandbox else None,
+                skipped_unsafe=skipped_unsafe,
             )
             write_test_artifacts(session.path, result)
 
@@ -1314,8 +1380,8 @@ def test(
         console.print(f"[bold]Test mode:[/bold] {mode_label}\n")
         console.print("[bold]Test commands[/bold]\n")
 
-        for index, command in enumerate(commands, start=1):
-            console.print(f"{index}. {command}")
+        for index, spec in enumerate(command_specs, start=1):
+            console.print(f"{index}. [{spec.source}] {spec.command}")
 
         if not sandbox and session.metadata.status != "applied":
             console.print(
@@ -1336,12 +1402,13 @@ def test(
         console.print("\n[bold]Running tests...[/bold]\n")
 
         if sandbox:
-            result = run_tests_in_sandbox(
+            result = run_test_specs_in_sandbox(
                 repo_root=workspace_root,
                 patch_path=patch_path,
-                commands=commands,
+                command_specs=command_specs,
                 timeout_seconds=timeout,
                 keep_sandbox=keep_sandbox,
+                skipped_unsafe=skipped_unsafe,
             )
             sandbox_metadata = result.sandbox or {}
             sandbox_path = sandbox_metadata.get("runtime_path") or sandbox_metadata.get("path")
@@ -1357,17 +1424,19 @@ def test(
                 console.print("\n[red]Patch apply check failed in sandbox.[/red]")
                 console.print("No tests were run.")
         else:
-            result = run_test_commands(
-                commands=commands,
+            result = run_test_command_specs(
+                command_specs=command_specs,
                 repo_root=workspace_root,
                 timeout_seconds=timeout,
+                mode="working_tree",
+                skipped_unsafe=skipped_unsafe,
             )
 
         write_test_artifacts(session.path, result)
 
         for command_result in result.commands:
             marker = "[green]OK[/green]" if command_result.status == "passed" else "[red]FAIL[/red]"
-            console.print(f"{marker} {command_result.command}")
+            console.print(f"{marker} [{command_result.source}] {command_result.command}")
 
             if command_result.status != "passed":
                 if command_result.exit_code is not None:

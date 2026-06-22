@@ -79,6 +79,22 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("Acceptance criteria", prompt)
         self.assertIn("calculator.py", prompt)
 
+    def test_file_changes_generation_prompt_contains_small_file_rewrite_policy(self) -> None:
+        prompt = get_prompt("file_changes_generation").render(
+            workspace_context="context",
+            plan="plan",
+            plan_constraints="Plan constraints",
+            instruction="instruction",
+        )
+
+        self.assertIn("small files", prompt)
+        self.assertIn("structural changes", prompt)
+        self.assertIn("full_file_rewrite", prompt)
+        self.assertIn("replace_block", prompt)
+        self.assertIn("Avoid multiple append_to_file", prompt)
+        self.assertIn("subparsers before parse_args", prompt)
+        self.assertIn("argparse/main", prompt)
+
     def test_semantic_patch_review_prompt_contains_safety_rules(self) -> None:
         prompt = get_prompt("semantic_patch_review").render(
             review_context="{}",
@@ -131,6 +147,19 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("Return ONLY valid JSON", prompt)
         self.assertIn('"changes"', prompt)
         self.assertIn("repair context", prompt)
+
+    def test_repair_file_changes_prompt_contains_small_file_rewrite_policy(self) -> None:
+        prompt = get_prompt("repair_file_changes").render(
+            repair_context="repair context",
+        )
+
+        self.assertIn("Small-file rewrite policy", prompt)
+        self.assertIn("small files", prompt)
+        self.assertIn("structural or behavioral errors", prompt)
+        self.assertIn("full_file_rewrite", prompt)
+        self.assertIn("replace_block", prompt)
+        self.assertIn("Do not patch structural failures by adding more append_to_file", prompt)
+        self.assertIn("subparsers before parse_args", prompt)
 
     def test_commit_message_prompt_contains_safety_rules(self) -> None:
         prompt = get_prompt("commit_message_generation").render(

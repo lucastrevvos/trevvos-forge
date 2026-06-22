@@ -28,8 +28,10 @@ from trevvos_forge.exceptions import (
     DiffValidationError,
     FileChangeOutputError,
     ForgeError,
+    RepairNotRepairableError,
     TestRunError,
 )
+from trevvos_forge.file_changes_error_artifacts import write_file_changes_error_artifacts
 from trevvos_forge.file_change_outputs import parse_file_changes_output
 from trevvos_forge.operation_error_artifacts import write_operation_error_artifacts
 from trevvos_forge.plan_constraints import (
@@ -55,6 +57,7 @@ from trevvos_forge.review_workflow import (
     write_llm_review_artifacts,
 )
 from trevvos_forge.repair_workflow import (
+    build_not_repairable_metadata,
     build_repair_context,
     build_repair_metadata,
     build_repair_prompt,
@@ -78,6 +81,7 @@ from trevvos_forge.sessions import (
     write_session_text,
 )
 from trevvos_forge.settings import ForgeSettings
+from trevvos_forge.small_file_policy import detect_small_file_structural_edit_risk
 from trevvos_forge.structured_outputs import parse_plan_output
 from trevvos_forge.status_workflow import (
     build_session_status,
@@ -792,7 +796,10 @@ def diff(
     ] = Path("."),
     retry: Annotated[
         bool,
-        typer.Option("--retry", help="Retry diff generation using operation_error.json from the session."),
+        typer.Option(
+            "--retry",
+            help="Retry diff generation using operation_error.json or file_changes_error.json from the session.",
+        ),
     ] = False,
 ) -> None:
     """
@@ -828,22 +835,27 @@ def diff(
         plan_constraints_section = build_plan_constraints_prompt_section(plan_constraints)
 
         if retry:
-            console.print("[bold]Retrying diff after operation error...[/bold]\n")
+            console.print("[bold]Retrying diff after previous diff generation error...[/bold]\n")
             retry_context = build_retry_context(session=session, repo_root=workspace_root)
             retry_context_loaded = True
-            operation_error = retry_context["operation_error"]
+            previous_error = retry_context["previous_error"]
             prompt_template = get_prompt("file_changes_retry")
             retry_metadata = build_retry_metadata(
                 session=session,
                 prompt_ref=prompt_template.ref,
                 status="started",
-                operation_error=operation_error,
+                operation_error=previous_error,
             )
 
             console.print("[bold]Previous error[/bold]")
-            console.print(f"  - {operation_error.get('error_type', 'unknown')} in {operation_error.get('path', 'unknown')}")
-            console.print(f"  - operation: {operation_error.get('operation', 'unknown')}")
-            console.print(f"  - target: {operation_error.get('target', 'unknown')}")
+            console.print(f"  - source: {retry_context.get('retry_error_source', 'unknown')}")
+            console.print(f"  - type: {previous_error.get('error_type', 'unknown')}")
+            if previous_error.get("path") is not None:
+                console.print(f"  - path: {previous_error.get('path', 'unknown')}")
+            if previous_error.get("operation") is not None:
+                console.print(f"  - operation: {previous_error.get('operation', 'unknown')}")
+            if previous_error.get("target") is not None:
+                console.print(f"  - target: {previous_error.get('target', 'unknown')}")
 
             prompt = build_retry_prompt(retry_context)
         else:
@@ -906,6 +918,14 @@ def diff(
         diff_warnings: list[str] = []
         if plan_constraints_check["status"] == "warning":
             diff_warnings.extend(plan_constraints_check.get("warnings", []))
+        diff_warnings.extend(
+            detect_small_file_structural_edit_risk(
+                file_changes=file_changes,
+                repo_root=workspace_root,
+                plan=plan_constraints,
+                request=instruction,
+            )
+        )
 
         unified_diff = build_unified_diff_from_file_changes(
             workspace_root=workspace_root,
@@ -982,6 +1002,8 @@ def diff(
             session.path,
             [
                 "file_changes_error.txt",
+                "file_changes_error.json",
+                "file_changes_error.md",
                 "diff_error.txt",
                 "operation_error.json",
                 "operation_error.md",
@@ -1052,6 +1074,7 @@ def diff(
 
     except FileChangeOutputError as exc:
         if session is not None:
+            write_file_changes_error_artifacts(session, str(exc))
             write_session_text(
                 session=session,
                 file_name="file_changes_error.txt",
@@ -1065,6 +1088,10 @@ def diff(
         if retry:
             console.print("\n[red]Retry failed.[/red]")
         print_error(str(exc))
+        if session is not None:
+            console.print("\n[bold]File changes error artifacts[/bold]")
+            console.print(f"  - {session.path / 'file_changes_error.json'}")
+            console.print(f"  - {session.path / 'file_changes_error.md'}")
         raise typer.Exit(code=1)
 
     except DiffValidationError as exc:
@@ -1164,6 +1191,19 @@ def repair(
         workspace_root = path.resolve()
         settings = load_settings()
 
+        if session_id:
+            session = get_session(root=workspace_root, session_id=session_id)
+        else:
+            session = get_current_session(workspace_root)
+
+        console.print("[bold]Repairing diff from session evidence...[/bold]\n")
+
+        repair_context = build_repair_context(
+            session=session,
+            repo_root=workspace_root,
+            source=source,
+        )
+
         if provider_name != "ollama":
             raise DiffError(f"Unsupported repair provider: {provider_name}")
 
@@ -1177,18 +1217,6 @@ def repair(
             else build_provider(settings)
         )
 
-        if session_id:
-            session = get_session(root=workspace_root, session_id=session_id)
-        else:
-            session = get_current_session(workspace_root)
-
-        console.print("[bold]Repairing diff from session evidence...[/bold]\n")
-
-        repair_context = build_repair_context(
-            session=session,
-            repo_root=workspace_root,
-            source=source,
-        )
         prompt_template = get_prompt("repair_file_changes")
         repair_metadata = build_repair_metadata(
             session=session,
@@ -1235,6 +1263,15 @@ def repair(
         diff_warnings: list[str] = []
         if plan_constraints_check["status"] == "warning":
             diff_warnings.extend(plan_constraints_check.get("warnings", []))
+        instruction = read_session_text(session, "user_request.txt")
+        diff_warnings.extend(
+            detect_small_file_structural_edit_risk(
+                file_changes=file_changes,
+                repo_root=workspace_root,
+                plan=plan_constraints,
+                request=instruction,
+            )
+        )
 
         unified_diff = build_unified_diff_from_file_changes(
             workspace_root=workspace_root,
@@ -1266,7 +1303,6 @@ def repair(
             },
         )
 
-        instruction = read_session_text(session, "user_request.txt")
         change_summary = build_change_summary_markdown(
             request=instruction,
             file_changes=file_changes,
@@ -1292,6 +1328,8 @@ def repair(
             session.path,
             [
                 "file_changes_error.txt",
+                "file_changes_error.json",
+                "file_changes_error.md",
                 "diff_error.txt",
                 "operation_error.json",
                 "operation_error.md",
@@ -1330,6 +1368,18 @@ def repair(
 
         console.print("\n[bold]Next[/bold]")
         console.print("  trevvos test --sandbox")
+
+    except RepairNotRepairableError as exc:
+        if session is not None:
+            write_repair_metadata(session, build_not_repairable_metadata(session))
+            update_session_status(session, "diff_generation_failed")
+
+        console.print("\n[red]Repair failed.[/red]")
+        print_error(str(exc))
+        if session is not None:
+            console.print("\n[bold]Repair artifacts[/bold]")
+            console.print(f"  - {session.path / 'repair_metadata.json'}")
+        raise typer.Exit(code=1)
 
     except (FileChangeOutputError, DiffValidationError, ApplyError, ForgeError) as exc:
         if session is not None:

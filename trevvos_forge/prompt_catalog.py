@@ -238,6 +238,12 @@ Nao copie numeros de linha do contexto para o conteudo final.
 Nao concatene o texto novo em um paragrafo existente quando a intencao for inserir abaixo, depois, antes ou em nova linha.
 Prefira "mode": "operation_based_edit" para alteracoes locais.
 Use "mode": "full_file_rewrite" somente quando uma operacao local nao for suficiente.
+Small-file rewrite policy:
+- For small files (<= 120 lines) with structural changes, prefer controlled full_file_rewrite or a wide replace_block.
+- Avoid multiple append_to_file or insert_after_line operations to reorganize a small file.
+- For small Python CLI files using argparse/main, keep imports at the top, helpers before dispatch, subparsers before parse_args, dispatch inside main(), and the final call inside if __name__ == "__main__": main().
+- If a small file changes the main control flow, full_file_rewrite is acceptable.
+- Do not rewrite large files without clear justification.
 Para Markdown, use "operation": "insert_after_heading" quando o pedido disser abaixo do titulo, depois da secao ou equivalente.
 Para insercao depois de uma linha exata, use "operation": "insert_after_line".
 Para insercao antes de uma linha exata, use "operation": "insert_before_line".
@@ -537,6 +543,10 @@ Rules:
 - Preserve files listed in files_not_to_modify.
 - Do not modify files outside files_to_modify or files_to_create unless the evidence clearly requires it.
 - For small files and structural changes, full_file_rewrite or replace_block is allowed.
+- Small-file rewrite policy: for small files (<= 120 lines) with structural or behavioral errors, prefer full_file_rewrite or a wide replace_block.
+- For small Python CLI files using argparse/main, fix the whole file structure: imports at the top, helpers before dispatch, subparsers before parse_args, dispatch inside main(), and the final call inside if __name__ == "__main__": main().
+- Do not patch structural failures by adding more append_to_file edits at the end of a small file.
+- Do not rewrite large files without clear justification.
 - Use deterministic targets that exist in the provided current file content.
 - Do not invent lines that do not appear in the current file context.
 - If evidence is insufficient to produce a safe repair, return a structured error JSON instead of inventing changes.

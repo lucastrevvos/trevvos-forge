@@ -474,15 +474,22 @@ def run_test_specs_in_sandbox(
 
 def write_test_artifacts(session_dir: Path, result: TestRunResult) -> None:
     session_dir.mkdir(parents=True, exist_ok=True)
+    result_file_name, output_file_name = get_mode_specific_test_artifact_names(result.mode)
+    result_payload = json.dumps(result.to_dict(), indent=2, ensure_ascii=False)
+    output_log = _build_output_log(result)
 
-    (session_dir / "test_results.json").write_text(
-        json.dumps(result.to_dict(), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    (session_dir / "test_output.log").write_text(
-        _build_output_log(result),
-        encoding="utf-8",
-    )
+    for file_name in [result_file_name, "test_results.json"]:
+        (session_dir / file_name).write_text(result_payload, encoding="utf-8")
+
+    for file_name in [output_file_name, "test_output.log"]:
+        (session_dir / file_name).write_text(output_log, encoding="utf-8")
+
+
+def get_mode_specific_test_artifact_names(mode: str) -> tuple[str, str]:
+    if mode == "sandbox":
+        return "sandbox_test_results.json", "sandbox_test_output.log"
+
+    return "working_tree_test_results.json", "working_tree_test_output.log"
 
 
 def _run_single_command(

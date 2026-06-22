@@ -198,11 +198,60 @@ class TestRunnerTests(unittest.TestCase):
 
             self.assertTrue(results_path.exists())
             self.assertTrue(output_path.exists())
+            self.assertTrue((session_dir / "working_tree_test_results.json").exists())
+            self.assertTrue((session_dir / "working_tree_test_output.log").exists())
 
             payload = json.loads(results_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["summary"]["passed"], 1)
             self.assertEqual(payload["command_sources"]["configured"], [_python_command("print('ok')")])
             self.assertIn("ok", output_path.read_text(encoding="utf-8"))
+
+    def test_sandbox_artifacts_write_mode_specific_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            session_dir = Path(temporary_directory) / "session"
+            result = TestRunResult(
+                status="passed",
+                commands=[],
+                summary={"total": 0, "passed": 0, "failed": 0, "timed_out": 0},
+                mode="sandbox",
+                sandbox={"enabled": True, "kept": False, "path": None},
+            )
+
+            write_test_artifacts(session_dir, result)
+
+            self.assertTrue((session_dir / "sandbox_test_results.json").exists())
+            self.assertTrue((session_dir / "sandbox_test_output.log").exists())
+            self.assertTrue((session_dir / "test_results.json").exists())
+            payload = json.loads((session_dir / "test_results.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["mode"], "sandbox")
+
+    def test_sandbox_then_working_tree_preserves_both_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            session_dir = Path(temporary_directory) / "session"
+            sandbox_result = TestRunResult(
+                status="passed",
+                commands=[],
+                summary={"total": 0, "passed": 0, "failed": 0, "timed_out": 0},
+                mode="sandbox",
+                sandbox={"enabled": True, "kept": False, "path": None},
+            )
+            working_result = TestRunResult(
+                status="passed",
+                commands=[],
+                summary={"total": 0, "passed": 0, "failed": 0, "timed_out": 0},
+                mode="working_tree",
+            )
+
+            write_test_artifacts(session_dir, sandbox_result)
+            write_test_artifacts(session_dir, working_result)
+
+            sandbox_payload = json.loads((session_dir / "sandbox_test_results.json").read_text(encoding="utf-8"))
+            working_payload = json.loads((session_dir / "working_tree_test_results.json").read_text(encoding="utf-8"))
+            alias_payload = json.loads((session_dir / "test_results.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(sandbox_payload["status"], "passed")
+            self.assertEqual(working_payload["status"], "passed")
+            self.assertEqual(alias_payload["mode"], "working_tree")
 
     def test_output_log_includes_command_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -71,6 +71,43 @@ class StatusWorkflowTests(unittest.TestCase):
             self.assertEqual(status["checks"]["working_tree_test"], "passed")
             self.assertEqual(status["next_recommended_command"], "trevvos commit")
 
+    def test_status_reads_sandbox_and_working_tree_results_together(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            session_dir = Path(temporary_directory)
+            _write_validated_diff(session_dir, metadata_status="applied")
+            _write_test_results(session_dir, mode="sandbox", status="passed", specific=True)
+            _write_test_results(session_dir, mode="working_tree", status="passed", specific=True)
+
+            status = build_session_status(session_dir)
+            rendered = render_status_text(status, verbose=True)
+
+            self.assertEqual(status["checks"]["sandbox_test"], "passed")
+            self.assertEqual(status["checks"]["working_tree_test"], "passed")
+            self.assertIn("Sandbox test status: passed", rendered)
+            self.assertIn("Working tree test status: passed", rendered)
+
+    def test_status_legacy_sandbox_alias_compatibility(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            session_dir = Path(temporary_directory)
+            _write_validated_diff(session_dir)
+            _write_test_results(session_dir, mode="sandbox", status="passed")
+
+            status = build_session_status(session_dir)
+
+            self.assertEqual(status["checks"]["sandbox_test"], "passed")
+            self.assertEqual(status["checks"]["working_tree_test"], "not_run")
+
+    def test_status_legacy_working_tree_alias_compatibility(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            session_dir = Path(temporary_directory)
+            _write_validated_diff(session_dir, metadata_status="applied")
+            _write_test_results(session_dir, mode="working_tree", status="passed")
+
+            status = build_session_status(session_dir)
+
+            self.assertEqual(status["checks"]["sandbox_test"], "not_run")
+            self.assertEqual(status["checks"]["working_tree_test"], "passed")
+
     def test_commit_committed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             session_dir = Path(temporary_directory)
@@ -177,8 +214,15 @@ def _write_validated_diff(session_dir: Path, metadata_status: str = "diff_valida
     )
 
 
-def _write_test_results(session_dir: Path, *, mode: str, status: str) -> None:
-    (session_dir / "test_results.json").write_text(
+def _write_test_results(session_dir: Path, *, mode: str, status: str, specific: bool = False) -> None:
+    file_name = (
+        "sandbox_test_results.json"
+        if specific and mode == "sandbox"
+        else "working_tree_test_results.json"
+        if specific
+        else "test_results.json"
+    )
+    (session_dir / file_name).write_text(
         json.dumps(
             {
                 "mode": mode,

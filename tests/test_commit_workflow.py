@@ -68,6 +68,29 @@ new file mode 100644
             self.assertEqual(plan.files_to_stage, ["README.md"])
             self.assertEqual(plan.unrelated_changes, [])
 
+    def test_commit_plan_includes_sandbox_and_working_tree_test_statuses(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _init_repo(Path(temporary_directory) / "repo")
+            session_dir = _create_session(root, ["README.md"])
+            (session_dir / "sandbox_test_results.json").write_text(
+                json.dumps({"mode": "sandbox", "status": "passed"}),
+                encoding="utf-8",
+            )
+            (session_dir / "working_tree_test_results.json").write_text(
+                json.dumps({"mode": "working_tree", "status": "passed"}),
+                encoding="utf-8",
+            )
+            (root / "README.md").write_text("# New\n", encoding="utf-8")
+
+            plan = build_commit_plan(session_dir=session_dir, repo_root=root)
+
+            self.assertEqual(plan.sandbox_test_status, "passed")
+            self.assertEqual(plan.working_tree_test_status, "passed")
+
+            payload = plan.to_dict()
+            self.assertEqual(payload["sandbox_test_status"], "passed")
+            self.assertEqual(payload["working_tree_test_status"], "passed")
+
     def test_commit_plan_detects_unrelated_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = _init_repo(Path(temporary_directory) / "repo")

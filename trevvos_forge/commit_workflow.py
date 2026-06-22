@@ -50,6 +50,8 @@ class CommitPlan:
     files_to_stage: list[str]
     unrelated_changes: list[str]
     test_status: str | None
+    sandbox_test_status: str | None
+    working_tree_test_status: str | None
     review_verdict: str | None
     review_risk_level: str | None
     message: CommitMessage
@@ -61,6 +63,8 @@ class CommitPlan:
             "files_to_stage": self.files_to_stage,
             "unrelated_changes": self.unrelated_changes,
             "test_status": self.test_status,
+            "sandbox_test_status": self.sandbox_test_status,
+            "working_tree_test_status": self.working_tree_test_status,
             "review_verdict": self.review_verdict,
             "review_risk_level": self.review_risk_level,
             "message": self.message.to_dict(),
@@ -167,6 +171,8 @@ def build_commit_plan(
         files_to_stage=files_to_stage,
         unrelated_changes=unrelated_changes,
         test_status=_test_status(session_dir),
+        sandbox_test_status=_mode_specific_test_status(session_dir, "sandbox"),
+        working_tree_test_status=_mode_specific_test_status(session_dir, "working_tree"),
         review_verdict=_review_field(session_dir, "verdict"),
         review_risk_level=_review_field(session_dir, "risk_level"),
         message=commit_message,
@@ -358,6 +364,26 @@ def _read_json(path: Path) -> Any:
 
 def _test_status(session_dir: Path) -> str | None:
     payload = _read_json(session_dir / "test_results.json")
+
+    if isinstance(payload, dict) and isinstance(payload.get("status"), str):
+        return payload["status"]
+
+    return None
+
+
+def _mode_specific_test_status(session_dir: Path, mode: str) -> str | None:
+    file_name = (
+        "sandbox_test_results.json"
+        if mode == "sandbox"
+        else "working_tree_test_results.json"
+    )
+    payload = _read_json(session_dir / file_name)
+
+    if not isinstance(payload, dict):
+        legacy = _read_json(session_dir / "test_results.json")
+
+        if isinstance(legacy, dict) and legacy.get("mode", "working_tree") == mode:
+            payload = legacy
 
     if isinstance(payload, dict) and isinstance(payload.get("status"), str):
         return payload["status"]

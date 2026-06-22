@@ -18,7 +18,17 @@ CHECK_LABELS = {
 
 def build_session_status(session_dir: Path, repo_root: Path | None = None) -> dict:
     metadata = _read_json(session_dir / "metadata.json")
-    test_results = _read_json(session_dir / "test_results.json")
+    legacy_test_results = _read_json(session_dir / "test_results.json")
+    sandbox_test_results = _mode_specific_test_results(
+        session_dir=session_dir,
+        mode="sandbox",
+        legacy_test_results=legacy_test_results,
+    )
+    working_tree_test_results = _mode_specific_test_results(
+        session_dir=session_dir,
+        mode="working_tree",
+        legacy_test_results=legacy_test_results,
+    )
     llm_review = _read_json(session_dir / "llm_review.json")
     deterministic_review = _read_json(session_dir / "semantic_review.json")
     commit_result = _read_json(session_dir / "commit_result.json")
@@ -31,17 +41,21 @@ def build_session_status(session_dir: Path, repo_root: Path | None = None) -> di
         "diff": "done" if (session_dir / "diff.patch").exists() else "missing",
         "safety_validation": _safety_validation_status(session_dir, metadata),
         "git_apply_check": _git_apply_check_status(session_dir, metadata, diff_check),
-        "sandbox_test": _sandbox_test_status(test_results),
+        "sandbox_test": _sandbox_test_status(sandbox_test_results),
         "review": _review_status(llm_review, deterministic_review),
         "apply": _apply_status(session_dir, metadata, apply_result),
-        "working_tree_test": _working_tree_test_status(test_results),
+        "working_tree_test": _working_tree_test_status(working_tree_test_results),
         "commit": _commit_status(commit_result),
     }
     warnings = _warnings(diff_warnings)
     details = {
         "review": _review_details(llm_review, deterministic_review),
         "commit": _commit_details(commit_result),
-        "test": _test_details(test_results),
+        "test": _test_details(
+            sandbox_test_results=sandbox_test_results,
+            working_tree_test_results=working_tree_test_results,
+            legacy_test_results=legacy_test_results,
+        ),
         "artifacts": _artifact_details(session_dir),
     }
     artifacts = _existing_artifacts(session_dir)
@@ -232,6 +246,28 @@ def _working_tree_test_status(test_results: Any) -> str:
     return _allowed_test_status(test_results.get("status"))
 
 
+def _mode_specific_test_results(
+    *,
+    session_dir: Path,
+    mode: str,
+    legacy_test_results: Any,
+) -> Any:
+    file_name = (
+        "sandbox_test_results.json"
+        if mode == "sandbox"
+        else "working_tree_test_results.json"
+    )
+    specific = _read_json(session_dir / file_name)
+
+    if isinstance(specific, dict):
+        return specific
+
+    if isinstance(legacy_test_results, dict) and legacy_test_results.get("mode", "working_tree") == mode:
+        return legacy_test_results
+
+    return None
+
+
 def _review_status(llm_review: Any, deterministic_review: Any) -> str:
     if isinstance(llm_review, dict):
         if llm_review.get("status") == "parse_failed":
@@ -301,10 +337,27 @@ def _commit_details(commit_result: Any) -> dict:
     }
 
 
-def _test_details(test_results: Any) -> dict:
-    if not isinstance(test_results, dict):
-        return {}
+def _test_details(
+    *,
+    sandbox_test_results: Any,
+    working_tree_test_results: Any,
+    legacy_test_results: Any,
+) -> dict:
+    details: dict[str, Any] = {}
 
+    if isinstance(sandbox_test_results, dict):
+        details["sandbox"] = _single_test_details(sandbox_test_results)
+
+    if isinstance(working_tree_test_results, dict):
+        details["working_tree"] = _single_test_details(working_tree_test_results)
+
+    if isinstance(legacy_test_results, dict):
+        details["last"] = _single_test_details(legacy_test_results)
+
+    return details
+
+
+def _single_test_details(test_results: dict) -> dict:
     return {
         "mode": test_results.get("mode", "working_tree"),
         "status": test_results.get("status"),
@@ -332,6 +385,10 @@ def _existing_artifacts(session_dir: Path) -> list[str]:
         "semantic_review.json",
         "test_results.json",
         "test_output.log",
+        "sandbox_test_results.json",
+        "sandbox_test_output.log",
+        "working_tree_test_results.json",
+        "working_tree_test_output.log",
         "llm_review.json",
         "llm_review.md",
         "commit_message.txt",
@@ -356,21 +413,13 @@ def _verbose_lines(status: dict) -> list[str]:
         lines.append(f"- Request alignment: {review.get('request_alignment', 'unknown')}")
 
     if test:
-        lines.append(f"- Test mode: {test.get('mode', 'unknown')}")
-        lines.append(f"- Test status: {test.get('status', 'unknown')}")
-        command_sources = test.get("command_sources")
+        if "sandbox" in test:
+            lines.append(f"- Sandbox test status: {test['sandbox'].get('status', 'unknown')}")
+            _append_verification_source_lines(lines, test["sandbox"])
 
-        if isinstance(command_sources, dict):
-            sources = []
-
-            if command_sources.get("configured"):
-                sources.append("configured")
-
-            if command_sources.get("plan"):
-                sources.append("plan")
-
-            if sources:
-                lines.append(f"- Verification commands: {' + '.join(sources)}")
+        if "working_tree" in test:
+            lines.append(f"- Working tree test status: {test['working_tree'].get('status', 'unknown')}")
+            _append_verification_source_lines(lines, test["working_tree"])
 
     if commit:
         lines.append(f"- Commit hash: {commit.get('hash') or 'not available'}")
@@ -381,6 +430,24 @@ def _verbose_lines(status: dict) -> list[str]:
         lines.extend(f"  - {name}: {path}" for name, path in artifacts.items())
 
     return lines
+
+
+def _append_verification_source_lines(lines: list[str], test_details: dict) -> None:
+    command_sources = test_details.get("command_sources")
+
+    if not isinstance(command_sources, dict):
+        return
+
+    sources = []
+
+    if command_sources.get("configured"):
+        sources.append("configured")
+
+    if command_sources.get("plan"):
+        sources.append("plan")
+
+    if sources:
+        lines.append(f"- Verification commands: {' + '.join(sources)}")
 
 
 def _check_marker(check_name: str, status: str | None) -> str:

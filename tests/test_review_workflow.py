@@ -54,6 +54,30 @@ class ReviewWorkflowTests(unittest.TestCase):
             self.assertIsNone(context["test_results"])
             self.assertNotIn("test_results.json", context["evidence_used"])
 
+    def test_build_review_context_includes_sandbox_and_working_tree_results(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            session_dir = Path(temporary_directory)
+            (session_dir / "sandbox_test_results.json").write_text(
+                json.dumps({"mode": "sandbox", "status": "passed"}),
+                encoding="utf-8",
+            )
+            (session_dir / "working_tree_test_results.json").write_text(
+                json.dumps({"mode": "working_tree", "status": "passed"}),
+                encoding="utf-8",
+            )
+            (session_dir / "sandbox_test_output.log").write_text("sandbox ok\n", encoding="utf-8")
+            (session_dir / "working_tree_test_output.log").write_text("working ok\n", encoding="utf-8")
+
+            context = build_review_context(session_dir)
+
+            self.assertTrue(context["test_results_available"])
+            self.assertEqual(context["sandbox_test_results"]["status"], "passed")
+            self.assertEqual(context["working_tree_test_results"]["status"], "passed")
+            self.assertIn("sandbox_test_results.json", context["evidence_used"])
+            self.assertIn("working_tree_test_results.json", context["evidence_used"])
+            self.assertEqual(context["sandbox_test_output_tail"], "sandbox ok")
+            self.assertEqual(context["working_tree_test_output_tail"], "working ok")
+
     def test_parse_plain_json(self) -> None:
         review = parse_llm_review_response(
             json.dumps(

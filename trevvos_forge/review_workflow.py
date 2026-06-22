@@ -31,8 +31,27 @@ def build_review_context(
     deterministic_review = _read_optional_json(session_dir / "semantic_review.json")
     file_changes = _read_optional_json(session_dir / "file_changes.json")
     diff_warnings = _read_optional_json(session_dir / "diff_warnings.json")
-    test_results = _read_optional_json(session_dir / "test_results.json")
-    test_output = _read_optional_text(session_dir / "test_output.log")
+    legacy_test_results = _read_optional_json(session_dir / "test_results.json")
+    sandbox_test_results = _mode_specific_test_results(
+        session_dir=session_dir,
+        mode="sandbox",
+        legacy_test_results=legacy_test_results,
+    )
+    working_tree_test_results = _mode_specific_test_results(
+        session_dir=session_dir,
+        mode="working_tree",
+        legacy_test_results=legacy_test_results,
+    )
+    sandbox_test_output = _mode_specific_test_output(
+        session_dir=session_dir,
+        mode="sandbox",
+        legacy_test_results=legacy_test_results,
+    )
+    working_tree_test_output = _mode_specific_test_output(
+        session_dir=session_dir,
+        mode="working_tree",
+        legacy_test_results=legacy_test_results,
+    )
     metadata = _read_optional_json(session_dir / "metadata.json")
 
     if request is not None:
@@ -52,13 +71,34 @@ def build_review_context(
     if deterministic_review is not None:
         evidence_used.append("semantic_review.json")
 
-    if test_results is not None:
-        evidence_used.append("test_results.json")
+    if sandbox_test_results is not None:
+        evidence_used.append("sandbox_test_results.json" if (session_dir / "sandbox_test_results.json").exists() else "test_results.json")
 
-    test_output_tail, test_output_truncated = _tail_lines(test_output or "", max_test_log_lines)
+    if working_tree_test_results is not None:
+        evidence_used.append(
+            "working_tree_test_results.json"
+            if (session_dir / "working_tree_test_results.json").exists()
+            else "test_results.json"
+        )
 
-    if test_output is not None:
-        evidence_used.append("test_output.log")
+    sandbox_test_output_tail, sandbox_test_output_truncated = _tail_lines(
+        sandbox_test_output or "",
+        max_test_log_lines,
+    )
+    working_tree_test_output_tail, working_tree_test_output_truncated = _tail_lines(
+        working_tree_test_output or "",
+        max_test_log_lines,
+    )
+
+    if sandbox_test_output is not None:
+        evidence_used.append("sandbox_test_output.log" if (session_dir / "sandbox_test_output.log").exists() else "test_output.log")
+
+    if working_tree_test_output is not None:
+        evidence_used.append(
+            "working_tree_test_output.log"
+            if (session_dir / "working_tree_test_output.log").exists()
+            else "test_output.log"
+        )
 
     warnings = []
 
@@ -83,10 +123,16 @@ def build_review_context(
         "change_summary": change_summary,
         "deterministic_review": deterministic_review,
         "warnings": warnings,
-        "test_results_available": test_results is not None,
-        "test_results": test_results,
-        "test_output_tail": test_output_tail,
-        "test_output_truncated": test_output_truncated,
+        "test_results_available": sandbox_test_results is not None or working_tree_test_results is not None,
+        "test_results": legacy_test_results,
+        "sandbox_test_results": sandbox_test_results,
+        "working_tree_test_results": working_tree_test_results,
+        "test_output_tail": working_tree_test_output_tail or sandbox_test_output_tail,
+        "test_output_truncated": working_tree_test_output_truncated or sandbox_test_output_truncated,
+        "sandbox_test_output_tail": sandbox_test_output_tail,
+        "sandbox_test_output_truncated": sandbox_test_output_truncated,
+        "working_tree_test_output_tail": working_tree_test_output_tail,
+        "working_tree_test_output_truncated": working_tree_test_output_truncated,
         "evidence_used": evidence_used,
     }
 
@@ -262,6 +308,50 @@ def _read_optional_json(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
+
+
+def _mode_specific_test_results(
+    *,
+    session_dir: Path,
+    mode: str,
+    legacy_test_results: Any,
+) -> Any:
+    file_name = (
+        "sandbox_test_results.json"
+        if mode == "sandbox"
+        else "working_tree_test_results.json"
+    )
+    specific = _read_optional_json(session_dir / file_name)
+
+    if isinstance(specific, dict):
+        return specific
+
+    if isinstance(legacy_test_results, dict) and legacy_test_results.get("mode", "working_tree") == mode:
+        return legacy_test_results
+
+    return None
+
+
+def _mode_specific_test_output(
+    *,
+    session_dir: Path,
+    mode: str,
+    legacy_test_results: Any,
+) -> str | None:
+    file_name = (
+        "sandbox_test_output.log"
+        if mode == "sandbox"
+        else "working_tree_test_output.log"
+    )
+    specific = _read_optional_text(session_dir / file_name)
+
+    if specific is not None:
+        return specific
+
+    if isinstance(legacy_test_results, dict) and legacy_test_results.get("mode", "working_tree") == mode:
+        return _read_optional_text(session_dir / "test_output.log")
+
+    return None
 
 
 def _limit_lines(text: str, max_lines: int) -> tuple[str, bool]:

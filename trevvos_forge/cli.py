@@ -1811,6 +1811,8 @@ def _print_commit_plan(plan) -> None:
 
     console.print("\n[bold]Validation evidence[/bold]")
     console.print(f"  - Test status: {plan.test_status or 'not available'}")
+    console.print(f"  - Sandbox test status: {plan.sandbox_test_status or 'not available'}")
+    console.print(f"  - Working tree test status: {plan.working_tree_test_status or 'not available'}")
     console.print(
         "  - LLM review: "
         f"{plan.review_verdict or 'not available'}"
@@ -2057,6 +2059,10 @@ def show_session(
         apply_error_path = session.path / "apply_error.txt"
         test_results_path = session.path / "test_results.json"
         test_output_path = session.path / "test_output.log"
+        sandbox_test_results_path = session.path / "sandbox_test_results.json"
+        sandbox_test_output_path = session.path / "sandbox_test_output.log"
+        working_tree_test_results_path = session.path / "working_tree_test_results.json"
+        working_tree_test_output_path = session.path / "working_tree_test_output.log"
         test_error_path = session.path / "test_error.txt"
         llm_review_path = session.path / "llm_review.md"
         llm_review_json_path = session.path / "llm_review.json"
@@ -2178,6 +2184,22 @@ def show_session(
         if test_output_path.exists():
             console.print("\n[bold]Test output[/bold]")
             console.print(f"Saved at: {test_output_path}")
+
+        if sandbox_test_results_path.exists():
+            console.print("\n[bold]Sandbox test results[/bold]")
+            console.print(f"Saved at: {sandbox_test_results_path}")
+
+        if sandbox_test_output_path.exists():
+            console.print("\n[bold]Sandbox test output[/bold]")
+            console.print(f"Saved at: {sandbox_test_output_path}")
+
+        if working_tree_test_results_path.exists():
+            console.print("\n[bold]Working tree test results[/bold]")
+            console.print(f"Saved at: {working_tree_test_results_path}")
+
+        if working_tree_test_output_path.exists():
+            console.print("\n[bold]Working tree test output[/bold]")
+            console.print(f"Saved at: {working_tree_test_output_path}")
 
         if test_error_path.exists():
             console.print("\n[bold]Test error[/bold]")

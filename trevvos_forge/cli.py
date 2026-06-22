@@ -19,7 +19,7 @@ from trevvos_forge.commit_workflow import (
     write_commit_artifacts,
 )
 from trevvos_forge.cli_regression_check import build_cli_regression_check, write_cli_regression_check
-from trevvos_forge.context_builder import build_context
+from trevvos_forge.context_builder import build_context, content_with_line_numbers
 from trevvos_forge.diff_builder import build_unified_diff_from_file_changes
 from trevvos_forge.diff_validation import validate_diff_patch
 from trevvos_forge.engine import TrevvosForgeEngine
@@ -45,6 +45,13 @@ from trevvos_forge.plan_constraints import (
     write_plan_constraints_check,
 )
 from trevvos_forge.prompt_catalog import get_prompt, list_prompts
+from trevvos_forge.project_scanner import (
+    build_project_profile_prompt_section,
+    load_project_profile,
+    render_project_profile,
+    save_project_profile,
+    scan_project,
+)
 from trevvos_forge.providers.ollama import OllamaProvider
 from trevvos_forge.review_artifacts import (
     build_change_summary_markdown,
@@ -113,7 +120,7 @@ from trevvos_forge.workspace import read_workspace_file, scan_workspace
 
 app = typer.Typer(
     name="trevvos",
-    help="Trevvos Forge: local-first AI engineering assistant.",
+    help="Trevvos Forge: local-first AI engineering assistant. Advisory: inspect/analyze. Execution: plan/diff/test/repair/apply/commit/work.",
     no_args_is_help=True,
 )
 
@@ -361,6 +368,89 @@ def _clear_plan_error_artifacts(session) -> None:
     )
 
 
+def _build_analysis_context(
+    *,
+    repo_root: Path,
+    target: Path | None,
+    profile: dict,
+    max_files: int = 8,
+    max_chars_per_file: int = 12_000,
+) -> tuple[str, list[str]]:
+    profile_section = build_project_profile_prompt_section(profile)
+    selected_paths = _select_analysis_files(
+        repo_root=repo_root,
+        target=target,
+        profile=profile,
+        max_files=max_files,
+    )
+    file_sections: list[str] = []
+
+    for relative_path in selected_paths:
+        content = read_workspace_file(
+            root=repo_root,
+            file_path=Path(relative_path),
+            max_chars=max_chars_per_file,
+        )
+        file_sections.append(
+            "\n".join(
+                [
+                    f"## File: {relative_path}",
+                    "",
+                    "Content with line numbers:",
+                    "",
+                    "```text",
+                    content_with_line_numbers(content),
+                    "```",
+                ]
+            )
+        )
+
+    target_text = str(target) if target is not None else "project"
+    files_text = "\n\n".join(file_sections) if file_sections else "No file contents selected."
+    context = "\n\n".join(
+        [
+            "# Advisory Analysis Context",
+            "",
+            f"Target: {target_text}",
+            "",
+            profile_section,
+            "",
+            "# Selected files",
+            "",
+            files_text,
+        ]
+    )
+    return context, selected_paths
+
+
+def _select_analysis_files(*, repo_root: Path, target: Path | None, profile: dict, max_files: int) -> list[str]:
+    if target is not None:
+        resolved_target = (repo_root / target).resolve()
+        try:
+            resolved_target.relative_to(repo_root.resolve())
+        except ValueError as exc:
+            raise DiffError(f"Analyze target is outside workspace: {target}") from exc
+        if not resolved_target.exists():
+            raise DiffError(f"Analyze target does not exist: {target}")
+        if resolved_target.is_file():
+            return [resolved_target.relative_to(repo_root.resolve()).as_posix()]
+        if resolved_target.is_dir():
+            source_files = [
+                path
+                for path in profile.get("source_files", [])
+                if isinstance(path, str) and (repo_root / path).resolve().is_relative_to(resolved_target)
+            ]
+            return source_files[:max_files]
+        raise DiffError(f"Analyze target is not a file or directory: {target}")
+
+    candidates: list[str] = []
+    for key in ["entrypoints", "source_files", "config_files", "docs_files"]:
+        values = profile.get(key)
+        if isinstance(values, list):
+            candidates.extend(value for value in values if isinstance(value, str))
+    return list(dict.fromkeys(candidates))[:max_files]
+
+
 @app.command()
 def ask(question: str) -> None:
     """
@@ -594,32 +684,196 @@ def scan(
 @app.command()
 def inspect(
     file_path: Annotated[
-        Path,
-        typer.Argument(help="File path inside the workspace to inspect."),
-    ],
+        Path | None,
+        typer.Argument(help="Optional file path inside the workspace to inspect."),
+    ] = None,
     path: Annotated[
         Path,
         typer.Option("--path", "-p", help="Workspace root path."),
     ] = Path("."),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print project profile as JSON."),
+    ] = False,
+    refresh: Annotated[
+        bool,
+        typer.Option("--refresh", help="Refresh the saved project profile."),
+    ] = False,
     max_chars: Annotated[
         int,
         typer.Option("--max-chars", help="Maximum number of characters to read."),
     ] = 12_000,
 ) -> None:
     """
-    Safely inspect a file inside the workspace.
+    Inspect project structure or safely inspect a file inside the workspace.
     """
     try:
+        if file_path is None:
+            profile = None if refresh else load_project_profile(path)
+            if profile is None:
+                with console.status("[bold]Inspecting project...[/bold]", spinner="dots"):
+                    profile = scan_project(path)
+                save_project_profile(path, profile)
+
+            if json_output:
+                console.print(json.dumps(profile, indent=2, ensure_ascii=False))
+            else:
+                console.print(render_project_profile(profile))
+            return
+
         content = read_workspace_file(
             root=path,
             file_path=file_path,
             max_chars=max_chars,
         )
 
+        if json_output:
+            console.print(json.dumps({"path": str(file_path), "content": content}, indent=2, ensure_ascii=False))
+            return
+
         console.print(f"[bold]File:[/bold] {file_path}\n")
         console.print(content)
 
     except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def analyze(
+    target: Annotated[
+        Path | None,
+        typer.Argument(help="Optional file or directory to analyze."),
+    ] = None,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print analysis metadata as JSON."),
+    ] = False,
+    max_files: Annotated[
+        int,
+        typer.Option("--max-files", help="Maximum number of files to include."),
+    ] = 8,
+    max_chars: Annotated[
+        int,
+        typer.Option("--max-chars", help="Maximum characters per file."),
+    ] = 12_000,
+) -> None:
+    """
+    Analyze code in advisory mode without modifying files.
+    """
+    session = None
+    try:
+        workspace_root = path.resolve()
+        settings = load_settings()
+        provider = build_provider(settings)
+        profile = scan_project(workspace_root)
+        save_project_profile(workspace_root, profile)
+
+        context_markdown, files_analyzed = _build_analysis_context(
+            repo_root=workspace_root,
+            target=target,
+            profile=profile,
+            max_files=max_files,
+            max_chars_per_file=max_chars,
+        )
+
+        session = create_session(
+            root=workspace_root,
+            user_request=f"analyze {target}" if target else "analyze project",
+            command="analyze",
+        )
+        _record_timeline_event(session, "analyze_started", "trevvos analyze", "started")
+
+        prompt_template = get_prompt("code_analysis")
+        prompt = prompt_template.render(analysis_context=context_markdown)
+
+        write_session_text(session=session, file_name="context.md", content=context_markdown)
+        write_session_json(
+            session,
+            "selected_files.json",
+            {
+                "mode": "advisory",
+                "target": str(target) if target else None,
+                "files_analyzed": files_analyzed,
+            },
+        )
+        write_session_json(session, "project_profile.json", profile)
+        write_session_text(session=session, file_name="analysis_prompt.md", content=prompt)
+
+        with console.status("[bold]Analyzing code with your local LLM...[/bold]", spinner="dots"):
+            raw_response = provider.generate(prompt)
+
+        write_session_text(session=session, file_name="analysis_raw_response.md", content=raw_response)
+        write_session_text(session=session, file_name="analysis_report.md", content=raw_response)
+
+        metadata = {
+            "mode": "advisory",
+            "command": "analyze",
+            "target": str(target) if target else "project",
+            "prompt": prompt_template.ref,
+            "model": settings.model,
+            "files_analyzed": files_analyzed,
+            "status": "succeeded",
+        }
+        write_session_json(session, "analysis_metadata.json", metadata)
+        session = update_session_status(session, "analysis_completed")
+        _record_timeline_event(
+            session,
+            "analyze_completed",
+            "trevvos analyze",
+            "succeeded",
+            artifacts=[
+                "analysis_report.md",
+                "analysis_metadata.json",
+                "project_profile.json",
+                "selected_files.json",
+                "context.md",
+            ],
+        )
+
+        if json_output:
+            console.print(json.dumps(metadata, indent=2, ensure_ascii=False))
+            return
+
+        console.print("[green]Analysis completed.[/green]\n")
+        console.print(f"Session:        [bold]{session.metadata.id}[/bold]")
+        console.print("Mode:           advisory")
+        console.print(f"Target:         {metadata['target']}")
+        console.print(f"Files analyzed: {len(files_analyzed)}")
+        console.print(f"Prompt:         {prompt_template.ref}")
+        console.print(f"Model:          {settings.model}")
+        console.print("\n[bold]Saved files[/bold]")
+        console.print(f"  - {session.path / 'analysis_report.md'}")
+        console.print(f"  - {session.path / 'analysis_metadata.json'}")
+        console.print(f"  - {session.path / 'project_profile.json'}")
+        console.print("\n[bold]Report[/bold]\n")
+        console.print(raw_response)
+
+    except ForgeError as exc:
+        if session is not None:
+            write_session_json(
+                session,
+                "analysis_metadata.json",
+                {
+                    "mode": "advisory",
+                    "command": "analyze",
+                    "target": str(target) if target else "project",
+                    "status": "failed",
+                    "error": str(exc),
+                },
+            )
+            _record_timeline_event(
+                session,
+                "analyze_failed",
+                "trevvos analyze",
+                "failed",
+                message=str(exc),
+                artifacts=["analysis_metadata.json"],
+            )
         print_error(str(exc))
         raise typer.Exit(code=1)
 

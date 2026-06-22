@@ -1,5 +1,6 @@
 import ast
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -9,6 +10,7 @@ from trevvos_forge.file_change_outputs import FileChangesOutput
 
 
 TEST_FILE_ERROR = "Test file must be inside a tests directory or match test_*.py / *_test.py."
+SAFE_PYTEST_SYMBOL_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 @dataclass(frozen=True)
@@ -318,6 +320,8 @@ def metadata_for_target(
     files_changed: list[str],
     sandbox_status: str | None = None,
     sandbox_commands: list[str] | None = None,
+    sandbox_command_source: str | None = None,
+    symbol_selector: dict | None = None,
     write_allowed: bool | None = None,
 ) -> dict:
     metadata = {
@@ -342,6 +346,10 @@ def metadata_for_target(
             "status": sandbox_status,
             "commands": sandbox_commands or [],
         }
+        if sandbox_command_source is not None:
+            metadata["sandbox"]["command_source"] = sandbox_command_source
+        if symbol_selector is not None:
+            metadata["sandbox"]["symbol_selector"] = symbol_selector
 
     if write_allowed is not None:
         metadata["write_allowed"] = write_allowed
@@ -349,19 +357,89 @@ def metadata_for_target(
     return metadata
 
 
-def select_test_generation_commands(*, workspace_root: Path, target: TestGenerationTarget) -> tuple[list[str], str]:
+def select_test_generation_commands(*, workspace_root: Path, target: TestGenerationTarget) -> tuple[list[str], str, dict]:
     config = load_config(workspace_root)
     configured = config.get("test_commands")
 
     if isinstance(configured, list):
         commands = [command.strip() for command in configured if isinstance(command, str) and command.strip()]
         if commands:
-            return commands, "configured"
+            return commands, "config", _disabled_symbol_selector("config_override")
 
     if target.framework == "pytest":
-        return ["pytest"], "detected"
+        pytest_command = _pytest_target_command(target.test_file)
+        if pytest_command is not None:
+            selector = _pytest_symbol_selector(target)
+            if selector["enabled"]:
+                return [f"{pytest_command} -k {selector['symbol']}"], "targeted_symbol", selector
+            return [pytest_command], "targeted", selector
+        return ["pytest"], "fallback", _disabled_symbol_selector("unsafe_test_file")
 
-    return ["python -m unittest discover -s tests"], "detected"
+    if target.framework == "unittest":
+        unittest_command = _unittest_target_command(target.test_file)
+        if unittest_command is not None:
+            return [unittest_command], "targeted", _disabled_symbol_selector("framework_not_supported")
+
+    return ["python -m unittest discover -s tests"], "fallback", _disabled_symbol_selector("framework_not_supported")
+
+
+def _pytest_symbol_selector(target: TestGenerationTarget) -> dict:
+    if target.all_symbols:
+        return _disabled_symbol_selector("all_symbols_mode")
+
+    if target.symbol is None or not target.symbol.name:
+        return _disabled_symbol_selector("missing_symbol")
+
+    if not SAFE_PYTEST_SYMBOL_PATTERN.fullmatch(target.symbol.name):
+        return _disabled_symbol_selector("unsafe_symbol")
+
+    return {
+        "enabled": True,
+        "symbol": target.symbol.name,
+        "framework": "pytest",
+    }
+
+
+def _disabled_symbol_selector(reason: str) -> dict:
+    return {
+        "enabled": False,
+        "reason": reason,
+    }
+
+
+def _pytest_target_command(test_file: str) -> str | None:
+    try:
+        validate_test_file_path(normalize_change_path(test_file))
+    except WorkspaceError:
+        return None
+
+    normalized = normalize_change_path(test_file)
+    path = PurePosixPath(normalized)
+
+    if path.suffix != ".py" or ".." in path.parts or path.is_absolute():
+        return None
+
+    return f"pytest {path.as_posix()}"
+
+
+def _unittest_target_command(test_file: str) -> str | None:
+    try:
+        validate_test_file_path(normalize_change_path(test_file))
+    except WorkspaceError:
+        return None
+
+    normalized = normalize_change_path(test_file)
+    path = PurePosixPath(normalized)
+
+    if path.suffix != ".py" or ".." in path.parts or path.is_absolute():
+        return None
+
+    module_parts = list(path.with_suffix("").parts)
+
+    if not module_parts or not all(part.isidentifier() for part in module_parts):
+        return None
+
+    return "python -m unittest " + ".".join(module_parts)
 
 
 def raw_response_json(raw_response: str) -> dict:

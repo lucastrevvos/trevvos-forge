@@ -59,6 +59,8 @@ trevvos tests add calculator.py --symbol divide --keep-sandbox
 With `--write`, Forge applies the generated patch only after sandbox tests pass and after confirmation, or immediately with `--yes`. A sandbox failure blocks writing even with `--yes`. The destination must be inside a test directory or match `test_*.py` / `*_test.py`.
 Use `--symbol` for one function/class or `--all` for all public testable symbols in a Python file. The options are mutually exclusive.
 
+When no `.trevvos/config.json` `test_commands` override is present, Forge tries to run the generated test file directly, such as `pytest tests/test_calculator.py` or `python -m unittest tests.test_calculator`. For pytest single-symbol generation, Forge uses a safe selector when possible, for example `pytest tests/test_calculator.py -k divide`. Configured `test_commands` take precedence over targeted commands.
+
 ### `trevvos review`
 
 Reviews a generated session using deterministic and optional LLM review.

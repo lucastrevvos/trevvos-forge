@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,8 +9,10 @@ from typer.testing import CliRunner
 
 from trevvos_forge.cli import app
 from trevvos_forge.prompt_catalog import get_prompt
+from trevvos_forge.test_runner import TestRunResult
 from trevvos_forge.test_generation import (
     TEST_FILE_ERROR,
+    SymbolInfo,
     build_test_generation_target,
     detect_testable_python_symbols,
     select_test_generation_commands,
@@ -182,8 +185,12 @@ class TestsAddCommandTests(unittest.TestCase):
             self.assertTrue((session_dir / "test_sandbox_results.json").exists())
             sandbox_results = _read_json(session_dir / "test_sandbox_results.json")
             self.assertEqual(sandbox_results["status"], "passed")
+            self.assertEqual(sandbox_results["command_source"], "targeted")
+            self.assertEqual(sandbox_results["commands"][0]["command"], "python -m unittest tests.test_calculator")
+            self.assertEqual(sandbox_results["commands"][0]["source"], "targeted_test_file")
             self.assertFalse(metadata["write"])
             self.assertEqual(metadata["sandbox"]["status"], "passed")
+            self.assertEqual(metadata["sandbox"]["command_source"], "targeted")
             self.assertTrue(metadata["write_allowed"])
             self.assertEqual(metadata["test_file"], "tests/test_calculator.py")
 
@@ -435,7 +442,7 @@ class TestsAddCommandTests(unittest.TestCase):
             self.assertEqual(result.exit_code, 0, result.output)
             output_log = (_only_session(root) / "test_sandbox_output.log").read_text(encoding="utf-8")
 
-            self.assertIn("python -m unittest discover -s tests", output_log)
+            self.assertIn("python -m unittest tests.test_calculator", output_log)
             self.assertIn("Patch apply: passed", output_log)
 
     def test_configured_test_command_is_used_for_sandbox(self) -> None:
@@ -456,7 +463,9 @@ class TestsAddCommandTests(unittest.TestCase):
             self.assertEqual(result.exit_code, 0, result.output)
             sandbox_results = _read_json(_only_session(root) / "test_sandbox_results.json")
 
-            self.assertEqual(sandbox_results["commands"][0]["source"], "configured")
+            self.assertEqual(sandbox_results["command_source"], "config")
+            self.assertEqual(sandbox_results["symbol_selector"]["reason"], "config_override")
+            self.assertEqual(sandbox_results["commands"][0]["source"], "config")
 
     def test_selects_pytest_when_detected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -468,10 +477,164 @@ class TestsAddCommandTests(unittest.TestCase):
                 symbol="divide",
             )
 
-            commands, source = select_test_generation_commands(workspace_root=root, target=target)
+            commands, source, selector = select_test_generation_commands(workspace_root=root, target=target)
 
-            self.assertEqual(commands, ["pytest"])
-            self.assertEqual(source, "detected")
+            self.assertEqual(commands, ["pytest tests/test_calculator.py -k divide"])
+            self.assertEqual(source, "targeted_symbol")
+            self.assertTrue(selector["enabled"])
+            self.assertEqual(selector["symbol"], "divide")
+
+    def test_pytest_all_mode_does_not_use_symbol_selector(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+            target = build_test_generation_target(
+                workspace_root=root,
+                source_path=Path("calculator.py"),
+                symbol=None,
+                all_symbols=True,
+            )
+
+            commands, source, selector = select_test_generation_commands(workspace_root=root, target=target)
+
+            self.assertEqual(commands, ["pytest tests/test_calculator.py"])
+            self.assertEqual(source, "targeted")
+            self.assertFalse(selector["enabled"])
+            self.assertEqual(selector["reason"], "all_symbols_mode")
+
+    def test_sandbox_uses_targeted_pytest_command(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+            provider = _FakeProvider(_create_pytest_test_file_response())
+            captured: dict[str, list[str]] = {}
+
+            def fake_sandbox(**kwargs):
+                command_specs = kwargs["command_specs"]
+                captured["commands"] = [spec.command for spec in command_specs]
+                captured["sources"] = [spec.source for spec in command_specs]
+                return TestRunResult(
+                    status="passed",
+                    commands=[],
+                    summary={"total": 0, "passed": 0, "failed": 0, "timed_out": 0},
+                    mode="sandbox",
+                    sandbox={
+                        "enabled": True,
+                        "kept": False,
+                        "path": None,
+                        "patch_apply_check": "passed",
+                        "patch_apply": "passed",
+                    },
+                )
+
+            with (
+                patch("trevvos_forge.cli.build_provider", return_value=provider),
+                patch("trevvos_forge.cli.run_test_specs_in_sandbox", side_effect=fake_sandbox),
+            ):
+                result = runner.invoke(app, ["tests", "add", "calculator.py", "--symbol", "divide", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertEqual(captured["commands"], ["pytest tests/test_calculator.py -k divide"])
+            self.assertEqual(captured["sources"], ["targeted_symbol"])
+            sandbox_results = _read_json(_only_session(root) / "test_sandbox_results.json")
+            metadata = _read_json(_only_session(root) / "test_generation_metadata.json")
+            self.assertEqual(sandbox_results["command_source"], "targeted_symbol")
+            self.assertTrue(sandbox_results["symbol_selector"]["enabled"])
+            self.assertEqual(metadata["sandbox"]["command_source"], "targeted_symbol")
+            self.assertTrue(metadata["sandbox"]["symbol_selector"]["enabled"])
+
+    def test_selects_unittest_target_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            target = build_test_generation_target(
+                workspace_root=root,
+                source_path=Path("calculator.py"),
+                symbol="divide",
+            )
+
+            commands, source, selector = select_test_generation_commands(workspace_root=root, target=target)
+
+            self.assertEqual(commands, ["python -m unittest tests.test_calculator"])
+            self.assertEqual(source, "targeted")
+            self.assertFalse(selector["enabled"])
+            self.assertEqual(selector["reason"], "framework_not_supported")
+
+    def test_unknown_framework_falls_back_to_discover(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            target = build_test_generation_target(
+                workspace_root=root,
+                source_path=Path("calculator.py"),
+                symbol="divide",
+            )
+            target = replace(target, framework="unknown")
+
+            commands, source, selector = select_test_generation_commands(workspace_root=root, target=target)
+
+            self.assertEqual(commands, ["python -m unittest discover -s tests"])
+            self.assertEqual(source, "fallback")
+            self.assertFalse(selector["enabled"])
+
+    def test_windows_test_file_path_is_normalized_for_target_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            target = build_test_generation_target(
+                workspace_root=root,
+                source_path=Path("calculator.py"),
+                symbol="divide",
+                requested_test_file=Path("tests") / "test_calculator.py",
+            )
+            target = replace(target, test_file="tests\\test_calculator.py", framework="pytest")
+
+            commands, source, selector = select_test_generation_commands(workspace_root=root, target=target)
+
+            self.assertEqual(commands, ["pytest tests/test_calculator.py -k divide"])
+            self.assertEqual(source, "targeted_symbol")
+            self.assertTrue(selector["enabled"])
+
+            target = replace(target, framework="unittest")
+            commands, source, selector = select_test_generation_commands(workspace_root=root, target=target)
+
+            self.assertEqual(commands, ["python -m unittest tests.test_calculator"])
+            self.assertEqual(source, "targeted")
+            self.assertFalse(selector["enabled"])
+
+    def test_unsafe_symbol_does_not_enter_pytest_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+            target = build_test_generation_target(
+                workspace_root=root,
+                source_path=Path("calculator.py"),
+                symbol="divide",
+            )
+            target = replace(target, symbol=SymbolInfo("divide; rm -rf", "function", 1), framework="pytest")
+
+            commands, source, selector = select_test_generation_commands(workspace_root=root, target=target)
+
+            self.assertEqual(commands, ["pytest tests/test_calculator.py"])
+            self.assertEqual(source, "targeted")
+            self.assertFalse(selector["enabled"])
+            self.assertEqual(selector["reason"], "unsafe_symbol")
+            self.assertNotIn("rm -rf", commands[0])
+
+    def test_suspicious_test_file_path_falls_back(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            target = build_test_generation_target(
+                workspace_root=root,
+                source_path=Path("calculator.py"),
+                symbol="divide",
+            )
+            target = replace(target, test_file="../tests/test_calculator.py", framework="unittest")
+
+            commands, source, selector = select_test_generation_commands(workspace_root=root, target=target)
+
+            self.assertEqual(commands, ["python -m unittest discover -s tests"])
+            self.assertEqual(source, "fallback")
+            self.assertFalse(selector["enabled"])
 
     def test_timeline_records_sandbox_events(self) -> None:
         runner = CliRunner()
@@ -592,6 +755,28 @@ def _create_failing_test_file_response() -> str:
                         "class TestGeneratedFailure(unittest.TestCase):\n"
                         "    def test_failure(self):\n"
                         "        self.assertEqual(1, 2)\n"
+                    ),
+                }
+            ]
+        }
+    )
+
+
+def _create_pytest_test_file_response() -> str:
+    return json.dumps(
+        {
+            "changes": [
+                {
+                    "path": "tests/test_calculator.py",
+                    "change_type": "created",
+                    "mode": "operation_based_edit",
+                    "operation": "create_file",
+                    "content": (
+                        "import pytest\n\n"
+                        "from calculator import divide\n\n\n"
+                        "def test_divide_by_zero_raises_value_error():\n"
+                        "    with pytest.raises(ValueError):\n"
+                        "        divide(10, 0)\n"
                     ),
                 }
             ]

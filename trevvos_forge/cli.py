@@ -369,7 +369,11 @@ def _delete_session_files(session_path: Path, file_names: list[str]) -> None:
             file_path.unlink()
 
 
-def _write_test_sandbox_aliases(session_path: Path) -> None:
+def _write_test_sandbox_aliases(
+    session_path: Path,
+    command_source: str | None = None,
+    symbol_selector: dict | None = None,
+) -> None:
     aliases = {
         "sandbox_test_results.json": "test_sandbox_results.json",
         "sandbox_test_output.log": "test_sandbox_output.log",
@@ -379,7 +383,19 @@ def _write_test_sandbox_aliases(session_path: Path) -> None:
         source_path = session_path / source_name
 
         if source_path.exists():
-            (session_path / alias_name).write_text(source_path.read_text(encoding="utf-8"), encoding="utf-8")
+            content = source_path.read_text(encoding="utf-8")
+            if source_name.endswith(".json") and command_source is not None:
+                try:
+                    payload = json.loads(content)
+                except json.JSONDecodeError:
+                    payload = None
+                if isinstance(payload, dict):
+                    payload["command_source"] = command_source
+                    if symbol_selector is not None:
+                        payload["symbol_selector"] = symbol_selector
+                    content = json.dumps(payload, indent=2, ensure_ascii=False)
+                    source_path.write_text(content, encoding="utf-8")
+            (session_path / alias_name).write_text(content, encoding="utf-8")
 
 
 def _record_timeline_event(session, event: str, command: str, status: str, **fields) -> None:
@@ -3846,17 +3862,26 @@ def tests_add(
             {"git_apply_check": "passed", "patch_path": str(session.path / "test_diff.patch")},
         )
 
-        test_commands, command_source = select_test_generation_commands(
+        test_commands, command_source, symbol_selector = select_test_generation_commands(
             workspace_root=workspace_root,
             target=target,
         )
-        command_specs = [CommandSpec(command=command, source=command_source) for command in test_commands]
+        command_spec_source = (
+            "targeted_test_file"
+            if command_source == "targeted"
+            else "targeted_symbol"
+            if command_source == "targeted_symbol"
+            else command_source
+        )
+        command_specs = [CommandSpec(command=command, source=command_spec_source) for command in test_commands]
         _record_timeline_event(
             session,
             "tests_add_sandbox_started",
             command_text,
             "started",
             test_commands=test_commands,
+            command_source=command_source,
+            symbol_selector=symbol_selector,
             keep_sandbox=keep_sandbox,
         )
         sandbox_result = run_test_specs_in_sandbox(
@@ -3867,7 +3892,11 @@ def tests_add(
             keep_sandbox=keep_sandbox,
         )
         write_test_artifacts(session.path, sandbox_result)
-        _write_test_sandbox_aliases(session.path)
+        _write_test_sandbox_aliases(
+            session.path,
+            command_source=command_source,
+            symbol_selector=symbol_selector,
+        )
 
         sandbox_metadata = sandbox_result.sandbox or {}
         sandbox_event = "tests_add_sandbox_completed" if sandbox_result.status == "passed" else "tests_add_sandbox_failed"
@@ -3898,6 +3927,8 @@ def tests_add(
             files_changed=files_changed,
             sandbox_status=sandbox_result.status,
             sandbox_commands=test_commands,
+            sandbox_command_source=command_source,
+            symbol_selector=symbol_selector,
             write_allowed=write_allowed,
         )
         write_session_json(session, "test_generation_metadata.json", metadata)
@@ -3930,6 +3961,8 @@ def tests_add(
             ],
             files_changed=files_changed,
             sandbox_status=sandbox_result.status,
+            command_source=command_source,
+            symbol_selector=symbol_selector,
         )
 
         if not write:
@@ -3957,6 +3990,12 @@ def tests_add(
             console.print("  - test-file-only safety validation: passed")
             console.print("  - git apply --check: passed")
             console.print(f"  - sandbox tests: {sandbox_result.status}")
+            console.print("\n[bold]Test commands[/bold]")
+            for index, command in enumerate(test_commands, start=1):
+                console.print(f"  {index}. {command}")
+                console.print(f"     source: {command_spec_source}")
+                if not symbol_selector.get("enabled", False):
+                    console.print(f"     symbol selector: disabled ({symbol_selector.get('reason', 'unknown')})")
             console.print("\n[bold]Next[/bold]")
             if sandbox_result.status == "passed":
                 console.print("  Re-run with `--write` to apply after review, or inspect test_diff.patch.")

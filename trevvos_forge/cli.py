@@ -118,6 +118,15 @@ from trevvos_forge.test_runner import (
     run_test_specs_in_sandbox,
     write_test_artifacts,
 )
+from trevvos_forge.test_generation import (
+    build_selected_files_payload,
+    build_test_generation_context,
+    build_test_generation_summary,
+    build_test_generation_target,
+    metadata_for_target,
+    raw_response_json,
+    validate_file_changes_are_tests_only,
+)
 from trevvos_forge.timeline import append_timeline_event, write_timeline_markdown
 from trevvos_forge.verification_coverage import (
     has_failed_verification_coverage,
@@ -163,10 +172,17 @@ config_app = typer.Typer(
     no_args_is_help=True,
 )
 
+tests_app = typer.Typer(
+    name="tests",
+    help="Controlled Execution: generate or add tests in test files only.",
+    no_args_is_help=True,
+)
+
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(prompts_app, name="prompts")
 app.add_typer(config_app, name="config")
 app.add_typer(models_app, name="models")
+app.add_typer(tests_app, name="tests")
 
 console = Console()
 err_console = Console(stderr=True)
@@ -3656,6 +3672,279 @@ def repair(
             console.print("\n[bold]Operation error artifacts[/bold]")
             console.print(f"  - {session.path / 'operation_error.json'}")
             console.print(f"  - {session.path / 'operation_error.md'}")
+        raise typer.Exit(code=1)
+
+
+@tests_app.command("add")
+def tests_add(
+    source_path: Annotated[
+        Path | None,
+        typer.Argument(help="Python source file to generate tests for."),
+    ] = None,
+    symbol: Annotated[
+        str | None,
+        typer.Option("--symbol", help="Function or class name to test."),
+    ] = None,
+    all_symbols: Annotated[
+        bool,
+        typer.Option("--all", help="Generate tests for all public testable symbols in the source file."),
+    ] = False,
+    test_file: Annotated[
+        Path | None,
+        typer.Option("--test-file", help="Target test file. Must be a test file path."),
+    ] = None,
+    unit: Annotated[
+        bool,
+        typer.Option("--unit", help="Generate unit tests. This is the MVP default."),
+    ] = False,
+    e2e: Annotated[
+        bool,
+        typer.Option("--e2e", help="Generate E2E tests. Not implemented in the MVP."),
+    ] = False,
+    write: Annotated[
+        bool,
+        typer.Option("--write", help="Apply the generated test patch after validation and confirmation."),
+    ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Apply without interactive confirmation when --write is used."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Output machine-readable metadata."),
+    ] = False,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """
+    Generate or add unit tests with Controlled Execution: test files only.
+    """
+    session = None
+
+    try:
+        if source_path is None:
+            raise DiffError("Missing source_path.")
+        if symbol and all_symbols:
+            raise DiffError("Use either --symbol or --all, not both.")
+        if not symbol and not all_symbols:
+            raise DiffError("Specify --symbol <name> or --all.")
+        if unit and e2e:
+            raise DiffError("Choose only one test type: --unit or --e2e.")
+
+        workspace_root = path.resolve()
+        target = build_test_generation_target(
+            workspace_root=workspace_root,
+            source_path=source_path,
+            symbol=symbol,
+            all_symbols=all_symbols,
+            requested_test_file=test_file,
+            e2e=e2e,
+        )
+
+        command_text = f"trevvos tests add {target.source_path}"
+        if target.all_symbols:
+            command_text += " --all"
+        elif target.symbol is not None:
+            command_text += f" --symbol {target.symbol.name}"
+        if test_file is not None:
+            command_text += f" --test-file {target.test_file}"
+        if write:
+            command_text += " --write"
+
+        session = create_session(root=workspace_root, user_request=command_text, command="tests add")
+        _record_timeline_event(session, "tests_add_started", command_text, "started")
+
+        settings = load_settings()
+        provider = build_provider(settings)
+        prompt_template = get_prompt("test_generation")
+
+        source_content = read_workspace_file(workspace_root, Path(target.source_path), max_chars=20_000)
+        test_path = workspace_root / target.test_file
+        test_content = (
+            read_workspace_file(workspace_root, Path(target.test_file), max_chars=20_000)
+            if test_path.exists()
+            else None
+        )
+        prompt_context = build_test_generation_context(
+            workspace_root=workspace_root,
+            target=target,
+            source_content=content_with_line_numbers(source_content),
+            test_content=content_with_line_numbers(test_content) if test_content is not None else None,
+        )
+        prompt = prompt_template.render(test_generation_context=prompt_context)
+
+        write_session_text(session, "test_generation_prompt.md", prompt)
+        write_session_json(
+            session,
+            "selected_files.json",
+            build_selected_files_payload(
+                target,
+                test_file_size=len(test_content.splitlines()) if test_content is not None else 0,
+            ),
+        )
+
+        with console.status("[bold]Generating test file changes with your local LLM...[/bold]", spinner="dots"):
+            raw_response = provider.generate(prompt)
+
+        write_session_text(session, "test_generation_raw_response.json", raw_response)
+        write_session_json(session, "test_generation_raw_response_parsed.json", raw_response_json(raw_response))
+
+        file_changes = parse_file_changes_output(raw_response)
+        validate_file_changes_are_tests_only(file_changes)
+
+        write_session_json(session, "test_file_changes.json", file_changes.to_dict())
+        write_session_json(session, "file_changes.json", file_changes.to_dict())
+
+        diff_warnings: list[str] = []
+        unified_diff = build_unified_diff_from_file_changes(
+            workspace_root=workspace_root,
+            file_changes=file_changes,
+            warnings=diff_warnings,
+        )
+        write_session_text(session, "test_diff.patch", unified_diff)
+        write_session_text(session, "diff.patch", unified_diff)
+
+        validation_result = validate_diff_patch(
+            workspace_root=workspace_root,
+            session=session,
+            diff_text=unified_diff,
+        )
+        check_patch(workspace_root=workspace_root, session=session)
+        validation_payload = validation_result.to_dict()
+        validation_payload["git_apply_check"] = "passed"
+        validation_payload["test_command"] = target.suggested_test_command
+        write_session_json(session, "test_generation_validation.json", validation_payload)
+        write_session_json(session, "diff_validation.json", validation_result.to_dict())
+        write_session_json(
+            session,
+            "diff_check.json",
+            {"git_apply_check": "passed", "patch_path": str(session.path / "test_diff.patch")},
+        )
+
+        files_changed = [change.path for change in file_changes.changes]
+        metadata = metadata_for_target(
+            target=target,
+            write=write,
+            prompt_ref=prompt_template.ref,
+            status="diff_ready",
+            files_changed=files_changed,
+        )
+        write_session_json(session, "test_generation_metadata.json", metadata)
+        write_session_text(
+            session,
+            "test_generation_summary.md",
+            build_test_generation_summary(
+                target=target,
+                files_changed=files_changed,
+                write=write,
+                status="diff_ready",
+            ),
+        )
+
+        _record_timeline_event(
+            session,
+            "tests_add_diff_generated",
+            command_text,
+            "succeeded",
+            artifacts=[
+                "test_generation_prompt.md",
+                "test_generation_raw_response.json",
+                "test_file_changes.json",
+                "test_diff.patch",
+                "test_generation_metadata.json",
+                "test_generation_summary.md",
+                "test_generation_validation.json",
+            ],
+            files_changed=files_changed,
+        )
+
+        if not write:
+            session = update_session_status(session, "test_diff_validated")
+            if json_output:
+                console.print(json.dumps({**metadata, "session_id": session.metadata.id}, indent=2))
+                return
+            console.print("[green]Test patch generated but not applied.[/green]\n")
+            console.print(f"Session: {session.metadata.id}")
+            console.print(f"Status:  {session.metadata.status}")
+            console.print(f"Prompt:  {prompt_template.ref}")
+            console.print("\n[bold]Files changed[/bold]")
+            for changed_path in files_changed:
+                console.print(f"  - {changed_path}")
+            console.print("\n[bold]Artifacts[/bold]")
+            console.print(f"  - {session.path / 'test_diff.patch'}")
+            console.print(f"  - {session.path / 'test_file_changes.json'}")
+            console.print(f"  - {session.path / 'test_generation_metadata.json'}")
+            console.print("\n[bold]Validations[/bold]")
+            console.print("  - test-file-only safety validation: passed")
+            console.print("  - git apply --check: passed")
+            console.print("\n[bold]Next[/bold]")
+            console.print("  Re-run with `--write` to apply after review, or inspect test_diff.patch.")
+            return
+
+        console.print("[green]About to apply generated test patch:[/green]\n")
+        console.print(f"Session: {session.metadata.id}")
+        console.print("\n[bold]Files changed[/bold]")
+        for changed_path in files_changed:
+            console.print(f"  - {changed_path}")
+        console.print("\n[bold]Patch[/bold]")
+        console.print(f"  {session.path / 'test_diff.patch'}")
+
+        if not yes and not typer.confirm("Apply this test-only patch?", default=False):
+            update_session_status(session, "tests_add_cancelled")
+            _record_timeline_event(
+                session,
+                "tests_add_cancelled",
+                command_text,
+                "cancelled",
+                reason="user_cancelled",
+            )
+            console.print("[yellow]Cancelled.[/yellow]")
+            return
+
+        apply_result = apply_patch(workspace_root=workspace_root, session=session)
+        write_session_json(session, "test_apply_result.json", apply_result.to_dict())
+        session = update_session_status(session, "tests_applied")
+        metadata = {**metadata, "status": "applied"}
+        write_session_json(session, "test_generation_metadata.json", metadata)
+        _record_timeline_event(
+            session,
+            "tests_add_applied",
+            command_text,
+            "succeeded",
+            artifacts=["test_apply_result.json"],
+            files_changed=files_changed,
+            next_recommended_command=target.suggested_test_command,
+        )
+
+        if json_output:
+            console.print(json.dumps({**metadata, "session_id": session.metadata.id}, indent=2))
+            return
+
+        console.print("\n[green]Test patch applied successfully.[/green]\n")
+        console.print(f"Session: {session.metadata.id}")
+        console.print(f"Status:  {session.metadata.status}")
+        console.print("\n[bold]Saved files[/bold]")
+        console.print(f"  - {session.path / 'test_apply_result.json'}")
+        console.print("\n[bold]Next[/bold]")
+        console.print(f"  {target.suggested_test_command}")
+
+    except ForgeError as exc:
+        if session is not None:
+            write_session_text(session, "test_generation_error.txt", str(exc))
+            update_session_status(session, "tests_add_failed")
+            _record_timeline_event(
+                session,
+                "tests_add_failed",
+                "trevvos tests add",
+                "failed",
+                reason=type(exc).__name__,
+                message=str(exc),
+                artifacts=["test_generation_error.txt"],
+            )
+
+        print_error(str(exc))
         raise typer.Exit(code=1)
 
 

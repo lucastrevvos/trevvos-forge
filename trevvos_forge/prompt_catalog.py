@@ -689,6 +689,90 @@ Contexto do retry:
 {retry_context}
 """,
     ),
+    "test_generation": PromptTemplate(
+        name="test_generation",
+        version="1.0.0",
+        description="Generates controlled test-only file_changes JSON.",
+        template="""
+You are Trevvos Forge in Controlled Execution: test files only.
+
+Generate test file changes only.
+Do not modify production code.
+Preserve existing tests.
+Add new tests for the requested function/symbol.
+Follow the existing test style if present.
+Return valid file_changes JSON.
+
+Supported modes:
+- Mode: single_symbol means generate tests only for the requested symbol.
+- Mode: all_symbols means generate tests for every symbol listed under "Symbols to test".
+
+Return ONLY valid JSON with top-level "changes".
+Do not use Markdown.
+Do not use a code block.
+Do not write text before or after the JSON.
+Do not return a diff.
+Do not say you changed files.
+
+Rules:
+- Only create or modify test files.
+- Never modify production source files.
+- Do not remove or rewrite existing tests.
+- Do not duplicate tests that already exist.
+- In Mode: all_symbols, generate tests for every listed symbol.
+- In Mode: all_symbols, do not skip a listed symbol unless there is a clear reason; if skipped, explain why in the test generation summary content when possible.
+- If adding to an existing test file, append new tests or insert in a clearly safe location.
+- If an import is needed, add it without removing existing imports.
+- If unsure about the framework, use the style already present in the test file.
+- If no test style exists, use unittest to avoid adding external dependencies.
+- Do not alter conftest.py.
+- Do not install dependencies.
+- Do not modify pyproject.toml, requirements files, source files, app files, or docs.
+- Prefer operation_based_edit.
+- For an existing test file, prefer append_to_file for the test body and insert_after_line only for a missing import.
+- For a new test file, use create_file.
+- Avoid full_file_rewrite for existing test files.
+
+Allowed modes:
+- operation_based_edit
+- full_file_rewrite
+
+Allowed operations when mode is operation_based_edit:
+- insert_after_line
+- insert_before_line
+- append_to_file
+- create_file
+
+Existing-file example:
+{{
+  "changes": [
+    {{
+      "path": "tests/test_calculator.py",
+      "change_type": "modified",
+      "mode": "operation_based_edit",
+      "operation": "append_to_file",
+      "insert": "\\n\\ndef test_divide_by_zero_raises_value_error():\\n    with pytest.raises(ValueError):\\n        divide(10, 0)\\n"
+    }}
+  ]
+}}
+
+New-file example:
+{{
+  "changes": [
+    {{
+      "path": "tests/test_calculator.py",
+      "change_type": "created",
+      "mode": "operation_based_edit",
+      "operation": "create_file",
+      "content": "import unittest\\n\\nfrom calculator import divide\\n\\n\\nclass TestCalculator(unittest.TestCase):\\n    def test_divide_by_zero_raises_value_error(self):\\n        with self.assertRaises(ValueError):\\n            divide(10, 0)\\n"
+    }}
+  ]
+}}
+
+Test generation context:
+{test_generation_context}
+""",
+    ),
     "semantic_patch_review": PromptTemplate(
         name="semantic_patch_review",
         version="1.0.0",

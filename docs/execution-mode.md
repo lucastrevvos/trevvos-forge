@@ -7,6 +7,8 @@ It can plan changes, generate patches, run tests, attempt repairs, apply diffs, 
 Execution commands also use the current working directory as the project root. Run them from the root of the Git repository or project you want to modify.
 Execution reports can also honor the current project language setting or a per-command `--language` override when supported.
 
+`trevvos tests add` is Controlled Execution: test files only. It can generate or apply a patch for unit tests, but it rejects production source targets.
+
 ## Important Warning
 
 Execution Mode is experimental. Review generated diffs carefully before applying.
@@ -41,6 +43,20 @@ Runs verification commands.
 trevvos test
 trevvos test --sandbox
 ```
+
+### `trevvos tests add`
+
+Generates or appends unit tests for a Python symbol. By default it is a dry-run: it creates a session, writes auditable artifacts, validates the patch with `git apply --check`, and does not modify the working tree.
+
+```bash
+trevvos tests add calculator.py --symbol divide
+trevvos tests add calculator.py --all
+trevvos tests add calculator.py --symbol divide --test-file tests/test_calculator.py
+trevvos tests add calculator.py --symbol divide --write
+```
+
+With `--write`, Forge applies the generated patch only after confirmation, or immediately with `--yes`. The destination must be inside a test directory or match `test_*.py` / `*_test.py`.
+Use `--symbol` for one function/class or `--all` for all public testable symbols in a Python file. The options are mutually exclusive.
 
 ### `trevvos review`
 
@@ -90,6 +106,7 @@ Execution Mode includes:
 - structured plan artifacts;
 - schema validation for model outputs;
 - generated patch validation;
+- test-file-only validation for `trevvos tests add`;
 - `git apply --check`;
 - sandbox testing;
 - retry metadata;

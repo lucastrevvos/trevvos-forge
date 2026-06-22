@@ -1,3 +1,4 @@
+import ast
 import json
 from pathlib import Path
 from typing import Annotated
@@ -451,6 +452,158 @@ def _select_analysis_files(*, repo_root: Path, target: Path | None, profile: dic
     return list(dict.fromkeys(candidates))[:max_files]
 
 
+def _build_explanation_context(
+    *,
+    repo_root: Path,
+    target: Path,
+    symbol: str | None,
+    flow: bool,
+    profile: dict,
+    max_chars_per_file: int = 12_000,
+) -> tuple[str, list[str]]:
+    relative_path = _validate_explain_target(repo_root=repo_root, target=target)
+    content = read_workspace_file(root=repo_root, file_path=Path(relative_path), max_chars=max_chars_per_file)
+    symbol_block = ""
+
+    if symbol:
+        symbol_info = _find_python_symbol(content, symbol)
+        if symbol_info is None:
+            raise DiffError(f"Symbol `{symbol}` not found in {relative_path}.")
+        symbol_block = "\n".join(
+            [
+                "Symbol focus:",
+                f"- name: {symbol}",
+                f"- kind: {symbol_info['kind']}",
+                f"- approximate lines: {symbol_info['start_line']}-{symbol_info['end_line']}",
+                "",
+                "Symbol source:",
+                "```text",
+                content_with_line_numbers(symbol_info["source"]),
+                "```",
+            ]
+        )
+
+    related_sections, files_explained = _related_flow_sections(
+        repo_root=repo_root,
+        primary_path=relative_path,
+        primary_content=content,
+        flow=flow,
+        profile=profile,
+        max_chars_per_file=max_chars_per_file,
+    )
+
+    mode = "flow" if flow else "symbol" if symbol else "file"
+    context = "\n\n".join(
+        [
+            "# Advisory Explanation Context",
+            "",
+            f"Mode: {mode}",
+            f"Target: {relative_path}",
+            f"Symbol: {symbol or 'none'}",
+            "",
+            build_project_profile_prompt_section(profile),
+            "",
+            "Primary file content with line numbers:",
+            "",
+            "```text",
+            content_with_line_numbers(content),
+            "```",
+            "",
+            symbol_block,
+            "",
+            related_sections,
+        ]
+    ).strip()
+    return context, files_explained
+
+
+def _validate_explain_target(*, repo_root: Path, target: Path) -> str:
+    resolved = (repo_root / target).resolve()
+    try:
+        resolved.relative_to(repo_root.resolve())
+    except ValueError as exc:
+        raise DiffError(f"Explain target is outside workspace: {target}") from exc
+    if not resolved.exists():
+        raise DiffError(f"Explain target does not exist: {target}")
+    if not resolved.is_file():
+        raise DiffError(f"Explain target must be a file: {target}")
+    return resolved.relative_to(repo_root.resolve()).as_posix()
+
+
+def _find_python_symbol(content: str, symbol: str) -> dict | None:
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return None
+    lines = content.splitlines()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == symbol:
+            start = getattr(node, "lineno", 1)
+            end = getattr(node, "end_lineno", start)
+            return {
+                "kind": "class" if isinstance(node, ast.ClassDef) else "function",
+                "start_line": start,
+                "end_line": end,
+                "source": "\n".join(lines[start - 1 : end]),
+            }
+    return None
+
+
+def _related_flow_sections(
+    *,
+    repo_root: Path,
+    primary_path: str,
+    primary_content: str,
+    flow: bool,
+    profile: dict,
+    max_chars_per_file: int,
+) -> tuple[str, list[str]]:
+    files = [primary_path]
+    if not flow:
+        return "Related flow context: not requested.", files
+
+    related: list[str] = []
+    try:
+        tree = ast.parse(primary_content)
+    except SyntaxError:
+        tree = None
+
+    imported_names: set[str] = set()
+    if tree is not None:
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom) and node.module:
+                for alias in node.names:
+                    imported_names.add(alias.name)
+
+    modules = profile.get("python", {}).get("modules", {}) if isinstance(profile.get("python"), dict) else {}
+    if isinstance(modules, dict):
+        for path, module in modules.items():
+            if path == primary_path or not isinstance(module, dict):
+                continue
+            functions = module.get("functions")
+            if isinstance(functions, list) and imported_names.intersection(str(function) for function in functions):
+                related.append(path)
+
+    sections = ["Related flow context:"]
+    for path in related[:3]:
+        content = read_workspace_file(root=repo_root, file_path=Path(path), max_chars=max_chars_per_file)
+        files.append(path)
+        sections.extend(
+            [
+                "",
+                f"## Related file: {path}",
+                "",
+                "```text",
+                content_with_line_numbers(content),
+                "```",
+            ]
+        )
+
+    if len(sections) == 1:
+        sections.append("No related files selected.")
+    return "\n".join(sections), files
+
+
 @app.command()
 def ask(question: str) -> None:
     """
@@ -873,6 +1026,156 @@ def analyze(
                 "failed",
                 message=str(exc),
                 artifacts=["analysis_metadata.json"],
+            )
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def explain(
+    target: Annotated[
+        Path,
+        typer.Argument(help="File path to explain."),
+    ],
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+    symbol: Annotated[
+        str | None,
+        typer.Option("--symbol", help="Function or class to explain."),
+    ] = None,
+    flow: Annotated[
+        bool,
+        typer.Option("--flow", help="Explain execution flow."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print explanation metadata as JSON."),
+    ] = False,
+    max_chars: Annotated[
+        int,
+        typer.Option("--max-chars", help="Maximum characters per file."),
+    ] = 12_000,
+) -> None:
+    """
+    Explain a file, symbol, or flow in advisory mode without modifying files.
+    """
+    session = None
+    try:
+        workspace_root = path.resolve()
+        settings = load_settings()
+        profile = scan_project(workspace_root)
+        save_project_profile(workspace_root, profile)
+        explanation_context, files_explained = _build_explanation_context(
+            repo_root=workspace_root,
+            target=target,
+            symbol=symbol,
+            flow=flow,
+            profile=profile,
+            max_chars_per_file=max_chars,
+        )
+        provider = build_provider(settings)
+
+        session = create_session(
+            root=workspace_root,
+            user_request=f"explain {target}",
+            command="explain",
+        )
+        _record_timeline_event(session, "explain_started", "trevvos explain", "started")
+
+        prompt_template = get_prompt("code_explanation")
+        prompt = prompt_template.render(explanation_context=explanation_context)
+
+        write_session_text(session=session, file_name="context.md", content=explanation_context)
+        write_session_json(
+            session,
+            "selected_files.json",
+            {
+                "mode": "advisory",
+                "target": str(target),
+                "symbol": symbol,
+                "flow": flow,
+                "files_explained": files_explained,
+            },
+        )
+        write_session_json(session, "project_profile.json", profile)
+        write_session_text(session=session, file_name="explanation_prompt.md", content=prompt)
+
+        with console.status("[bold]Explaining code with your local LLM...[/bold]", spinner="dots"):
+            raw_response = provider.generate(prompt)
+
+        write_session_text(session=session, file_name="explanation_raw_response.md", content=raw_response)
+        write_session_text(session=session, file_name="explanation.md", content=raw_response)
+
+        metadata = {
+            "mode": "advisory",
+            "command": "explain",
+            "target": str(target),
+            "symbol": symbol,
+            "flow": flow,
+            "prompt": prompt_template.ref,
+            "model": settings.model,
+            "files_explained": files_explained,
+            "status": "succeeded",
+        }
+        write_session_json(session, "explanation_metadata.json", metadata)
+        session = update_session_status(session, "explanation_completed")
+        _record_timeline_event(
+            session,
+            "explain_completed",
+            "trevvos explain",
+            "succeeded",
+            artifacts=[
+                "explanation.md",
+                "explanation_metadata.json",
+                "project_profile.json",
+                "selected_files.json",
+                "context.md",
+            ],
+        )
+
+        if json_output:
+            console.print(json.dumps(metadata, indent=2, ensure_ascii=False))
+            return
+
+        console.print("[green]Explanation completed.[/green]\n")
+        console.print(f"Session:        [bold]{session.metadata.id}[/bold]")
+        console.print("Mode:           advisory")
+        console.print(f"Target:         {target}")
+        console.print(f"Symbol:         {symbol}")
+        console.print(f"Flow:           {str(flow).lower()}")
+        console.print(f"Prompt:         {prompt_template.ref}")
+        console.print(f"Model:          {settings.model}")
+        console.print("\n[bold]Saved files[/bold]")
+        console.print(f"  - {session.path / 'explanation.md'}")
+        console.print(f"  - {session.path / 'explanation_metadata.json'}")
+        console.print(f"  - {session.path / 'project_profile.json'}")
+        console.print("\n[bold]Explanation[/bold]\n")
+        console.print(raw_response)
+
+    except ForgeError as exc:
+        if session is not None:
+            write_session_json(
+                session,
+                "explanation_metadata.json",
+                {
+                    "mode": "advisory",
+                    "command": "explain",
+                    "target": str(target),
+                    "symbol": symbol,
+                    "flow": flow,
+                    "status": "failed",
+                    "error": str(exc),
+                },
+            )
+            _record_timeline_event(
+                session,
+                "explain_failed",
+                "trevvos explain",
+                "failed",
+                message=str(exc),
+                artifacts=["explanation_metadata.json"],
             )
         print_error(str(exc))
         raise typer.Exit(code=1)

@@ -343,6 +343,72 @@ Pedido original:
 {instruction}
 """,
     ),
+    "file_changes_retry": PromptTemplate(
+        name="file_changes_retry",
+        version="1.0.0",
+        description="Regenerates structured file changes after a deterministic operation error.",
+        template="""
+Voce e a Trevvos Forge, uma assistente local de engenharia de software.
+
+Voce esta corrigindo uma tentativa anterior de gerar file_changes que falhou por erro deterministico de operacao.
+
+Responda SOMENTE com um JSON valido.
+Nao use Markdown.
+Nao use bloco de codigo.
+Nao escreva explicacoes antes ou depois.
+Nao retorne diff.
+Nao diga que alterou arquivos.
+Nao aplique as mudancas.
+
+Regras de retry:
+- Do not repeat invalid target.
+- Nao repita a mesma operacao invalida.
+- Se o erro anterior foi target_not_found, nao use o mesmo target inexistente.
+- Use apenas targets que aparecem no conteudo atual do arquivo.
+- Se o arquivo for pequeno e a mudanca for estrutural, prefira replace_block ou full_file_rewrite controlado.
+- Se o erro for target_not_found, escolha um alvo existente ou reescreva o arquivo pequeno.
+- Se o erro for ambiguous_target, escolha uma operacao mais precisa, um bloco maior, ou full_file_rewrite para arquivo pequeno.
+- Se o erro for mixed_modes, gere uma sequencia compativel usando apenas um modo por arquivo.
+- Preserve arquivos que o plano diz para nao alterar.
+- Nao invente linhas que nao existem.
+- Nao copie numeros de linha para o conteudo final.
+- Nao use placeholders como "...".
+- Nao modifique .env, .git, .venv, node_modules, .trevvos, bin ou obj.
+
+Schema JSON:
+{{
+  "changes": [
+    {{
+      "path": "arquivo.py",
+      "change_type": "modified",
+      "mode": "operation_based_edit",
+      "operation": "replace_block",
+      "target": "texto existente exato\\n",
+      "replacement": "texto novo\\n"
+    }}
+  ]
+}}
+
+Operacoes aceitas:
+- operation_based_edit com insert_after_heading, insert_after_line, insert_before_line, replace_exact_text, replace_block, append_to_file, create_file.
+- full_file_rewrite com content completo final do arquivo.
+
+Exemplo full_file_rewrite:
+{{
+  "changes": [
+    {{
+      "path": "main.py",
+      "change_type": "modified",
+      "mode": "full_file_rewrite",
+      "content": "conteudo completo final do arquivo\\n"
+    }}
+  ]
+}}
+
+Contexto do retry:
+{retry_context}
+""",
+    ),
     "semantic_patch_review": PromptTemplate(
         name="semantic_patch_review",
         version="1.0.0",

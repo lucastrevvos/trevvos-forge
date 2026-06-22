@@ -46,6 +46,12 @@ from trevvos_forge.review_workflow import (
     render_llm_review_markdown,
     write_llm_review_artifacts,
 )
+from trevvos_forge.retry_workflow import (
+    build_retry_context,
+    build_retry_metadata,
+    build_retry_prompt,
+    write_retry_metadata,
+)
 from trevvos_forge.sessions import (
     clean_sessions,
     create_session,
@@ -767,11 +773,17 @@ def diff(
         Path,
         typer.Option("--path", "-p", help="Workspace root path."),
     ] = Path("."),
+    retry: Annotated[
+        bool,
+        typer.Option("--retry", help="Retry diff generation using operation_error.json from the session."),
+    ] = False,
 ) -> None:
     """
     Generate a unified diff from a saved plan session.
     """
     session = None
+    retry_metadata: dict | None = None
+    retry_context_loaded = False
 
     try:
         workspace_root = path.resolve()
@@ -796,13 +808,33 @@ def diff(
         workspace_context = read_session_text(session, "context.md")
         plan_markdown = read_session_text(session, "plan.md")
 
-        prompt_template = get_prompt("file_changes_generation")
+        if retry:
+            console.print("[bold]Retrying diff after operation error...[/bold]\n")
+            retry_context = build_retry_context(session=session, repo_root=workspace_root)
+            retry_context_loaded = True
+            operation_error = retry_context["operation_error"]
+            prompt_template = get_prompt("file_changes_retry")
+            retry_metadata = build_retry_metadata(
+                session=session,
+                prompt_ref=prompt_template.ref,
+                status="started",
+                operation_error=operation_error,
+            )
 
-        prompt = prompt_template.render(
-            instruction=instruction,
-            workspace_context=workspace_context,
-            plan=plan_markdown,
-        )
+            console.print("[bold]Previous error[/bold]")
+            console.print(f"  - {operation_error.get('error_type', 'unknown')} in {operation_error.get('path', 'unknown')}")
+            console.print(f"  - operation: {operation_error.get('operation', 'unknown')}")
+            console.print(f"  - target: {operation_error.get('target', 'unknown')}")
+
+            prompt = build_retry_prompt(retry_context)
+        else:
+            prompt_template = get_prompt("file_changes_generation")
+
+            prompt = prompt_template.render(
+                instruction=instruction,
+                workspace_context=workspace_context,
+                plan=plan_markdown,
+            )
 
         write_session_text(
             session=session,
@@ -920,9 +952,16 @@ def diff(
             ],
         )
 
+        if retry and retry_metadata is not None:
+            retry_metadata["status"] = "succeeded"
+            write_retry_metadata(session, retry_metadata)
+
         session = update_session_status(session, "diff_validated")
 
-        console.print("[green]Diff generated successfully.[/green]\n")
+        if retry:
+            console.print("\n[green]Retry generated a new diff successfully.[/green]\n")
+        else:
+            console.print("[green]Diff generated successfully.[/green]\n")
         console.print(f"Session: {session.metadata.id}")
         console.print(f"Status:  {session.metadata.status}")
         console.print(f"Prompt:  {prompt_template.ref}")
@@ -938,6 +977,8 @@ def diff(
             console.print(f"  - {change.path} [{change.change_type}] {descriptor}")
 
         console.print("\n[bold]Artifacts[/bold]")
+        if retry:
+            console.print(f"  - retry_metadata.json: {session.path / 'retry_metadata.json'}")
         console.print(f"  - diff.patch: {session.path / 'diff.patch'}")
         console.print(f"  - change_summary.md: {session.path / 'change_summary.md'}")
         console.print(f"  - semantic_review.json: {session.path / 'semantic_review.json'}")
@@ -957,6 +998,8 @@ def diff(
         console.print(f"  - {session.path / 'file_changes_raw_response.json'}")
         console.print(f"  - {session.path / 'file_changes.json'}")
         console.print(f"  - {session.path / 'diff.patch'}")
+        if retry:
+            console.print(f"  - {session.path / 'retry_metadata.json'}")
         if diff_warnings:
             console.print(f"  - {session.path / 'diff_warnings.json'}")
         console.print(f"  - {session.path / 'diff_validation.json'}")
@@ -974,8 +1017,13 @@ def diff(
                 file_name="file_changes_error.txt",
                 content=str(exc),
             )
+            if retry and retry_metadata is not None:
+                retry_metadata["status"] = "failed"
+                write_retry_metadata(session, retry_metadata)
             update_session_status(session, "diff_generation_failed")
 
+        if retry:
+            console.print("\n[red]Retry failed.[/red]")
         print_error(str(exc))
         raise typer.Exit(code=1)
 
@@ -986,8 +1034,13 @@ def diff(
                 file_name="diff_validation_error.txt",
                 content=str(exc),
             )
+            if retry and retry_metadata is not None:
+                retry_metadata["status"] = "failed"
+                write_retry_metadata(session, retry_metadata)
             update_session_status(session, "diff_validation_failed")
 
+        if retry:
+            console.print("\n[red]Retry failed.[/red]")
         print_error(str(exc))
         raise typer.Exit(code=1)
 
@@ -1003,8 +1056,13 @@ def diff(
                 file_name="diff_check_error.txt",
                 content=message,
             )
+            if retry and retry_metadata is not None:
+                retry_metadata["status"] = "failed"
+                write_retry_metadata(session, retry_metadata)
             update_session_status(session, "diff_check_failed")
 
+        if retry:
+            console.print("\n[red]Retry failed.[/red]")
         print_error(message)
         raise typer.Exit(code=1)
 
@@ -1015,11 +1073,17 @@ def diff(
                 file_name="diff_error.txt",
                 content=str(exc),
             )
-            write_operation_error_artifacts(session, str(exc))
+            if not retry or retry_context_loaded:
+                write_operation_error_artifacts(session, str(exc))
+            if retry and retry_metadata is not None:
+                retry_metadata["status"] = "failed"
+                write_retry_metadata(session, retry_metadata)
             update_session_status(session, "diff_generation_failed")
 
+        if retry:
+            console.print("\n[red]Retry failed.[/red]")
         print_error(str(exc))
-        if session is not None:
+        if session is not None and (not retry or retry_context_loaded):
             console.print("\n[bold]Operation error artifacts[/bold]")
             console.print(f"  - {session.path / 'operation_error.json'}")
             console.print(f"  - {session.path / 'operation_error.md'}")

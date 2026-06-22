@@ -30,6 +30,18 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("Consider warnings", prompt)
         self.assertIn("Return ONLY valid JSON", prompt)
 
+    def test_file_changes_retry_prompt_contains_repair_rules(self) -> None:
+        prompt = get_prompt("file_changes_retry").render(
+            retry_context="retry context",
+        )
+
+        self.assertIn("Do not repeat invalid target", prompt)
+        self.assertIn("target_not_found", prompt)
+        self.assertIn("ambiguous_target", prompt)
+        self.assertIn("full_file_rewrite", prompt)
+        self.assertIn('"changes"', prompt)
+        self.assertIn("retry context", prompt)
+
     def test_commit_message_prompt_contains_safety_rules(self) -> None:
         prompt = get_prompt("commit_message_generation").render(
             commit_context="{}",

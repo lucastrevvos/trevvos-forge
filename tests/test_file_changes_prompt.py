@@ -109,6 +109,19 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn('"changes"', prompt)
         self.assertIn("retry context", prompt)
 
+    def test_repair_file_changes_prompt_contains_repair_evidence_rules(self) -> None:
+        prompt = get_prompt("repair_file_changes").render(
+            repair_context="repair context",
+        )
+
+        self.assertIn("sandbox", prompt)
+        self.assertIn("working_tree", prompt)
+        self.assertIn("acceptance_criteria", prompt)
+        self.assertIn("files_not_to_modify", prompt)
+        self.assertIn("Return ONLY valid JSON", prompt)
+        self.assertIn('"changes"', prompt)
+        self.assertIn("repair context", prompt)
+
     def test_commit_message_prompt_contains_safety_rules(self) -> None:
         prompt = get_prompt("commit_message_generation").render(
             commit_context="{}",

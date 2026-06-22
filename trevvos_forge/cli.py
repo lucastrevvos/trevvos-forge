@@ -54,6 +54,12 @@ from trevvos_forge.review_workflow import (
     render_llm_review_markdown,
     write_llm_review_artifacts,
 )
+from trevvos_forge.repair_workflow import (
+    build_repair_context,
+    build_repair_metadata,
+    build_repair_prompt,
+    write_repair_metadata,
+)
 from trevvos_forge.retry_workflow import (
     build_retry_context,
     build_retry_metadata,
@@ -1118,6 +1124,241 @@ def diff(
             console.print("\n[red]Retry failed.[/red]")
         print_error(str(exc))
         if session is not None and (not retry or retry_context_loaded):
+            console.print("\n[bold]Operation error artifacts[/bold]")
+            console.print(f"  - {session.path / 'operation_error.json'}")
+            console.print(f"  - {session.path / 'operation_error.md'}")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def repair(
+    session_id: Annotated[
+        str | None,
+        typer.Option("--session", "-s", help="Session ID to use. Defaults to current session."),
+    ] = None,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+    provider_name: Annotated[
+        str,
+        typer.Option("--provider", help="LLM provider to use for repair."),
+    ] = "ollama",
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="Model override for repair."),
+    ] = None,
+    source: Annotated[
+        str | None,
+        typer.Option("--from", help="Repair evidence source: sandbox, working-tree, or review."),
+    ] = None,
+) -> None:
+    """
+    Generate a repaired diff from failed tests, review concerns, and plan evidence.
+    """
+    session = None
+    repair_metadata: dict | None = None
+    repair_context: dict | None = None
+
+    try:
+        workspace_root = path.resolve()
+        settings = load_settings()
+
+        if provider_name != "ollama":
+            raise DiffError(f"Unsupported repair provider: {provider_name}")
+
+        provider = (
+            OllamaProvider(
+                model=model,
+                base_url=settings.base_url,
+                timeout=settings.timeout,
+            )
+            if model
+            else build_provider(settings)
+        )
+
+        if session_id:
+            session = get_session(root=workspace_root, session_id=session_id)
+        else:
+            session = get_current_session(workspace_root)
+
+        console.print("[bold]Repairing diff from session evidence...[/bold]\n")
+
+        repair_context = build_repair_context(
+            session=session,
+            repo_root=workspace_root,
+            source=source,
+        )
+        prompt_template = get_prompt("repair_file_changes")
+        repair_metadata = build_repair_metadata(
+            session=session,
+            prompt_ref=prompt_template.ref,
+            status="started",
+            reason=repair_context["reason"],
+            evidence_used=repair_context.get("evidence_used", []),
+        )
+
+        prompt = build_repair_prompt(repair_context)
+
+        write_session_text(session=session, file_name="repair_prompt.md", content=prompt)
+        write_repair_metadata(session, repair_metadata)
+
+        with console.status("[bold]Generating repaired file changes with your local LLM...[/bold]", spinner="dots"):
+            raw_file_changes_response = provider.generate(prompt)
+
+        write_session_text(
+            session=session,
+            file_name="repair_raw_response.json",
+            content=raw_file_changes_response,
+        )
+
+        file_changes = parse_file_changes_output(raw_file_changes_response)
+
+        write_session_json(
+            session=session,
+            file_name="file_changes.json",
+            data=file_changes.to_dict(),
+        )
+
+        plan_constraints = load_plan_constraints(session.path)
+        plan_constraints_check = check_file_changes_against_plan_constraints(
+            file_changes=file_changes,
+            constraints=plan_constraints,
+        )
+        write_plan_constraints_check(session.path, plan_constraints_check)
+
+        if plan_constraints_check["status"] == "failed":
+            violations = plan_constraints_check.get("violations", [])
+            detail = violations[0] if violations else "plan constraints were violated."
+            raise DiffError(f"Diff rejected: file {detail}")
+
+        diff_warnings: list[str] = []
+        if plan_constraints_check["status"] == "warning":
+            diff_warnings.extend(plan_constraints_check.get("warnings", []))
+
+        unified_diff = build_unified_diff_from_file_changes(
+            workspace_root=workspace_root,
+            file_changes=file_changes,
+            warnings=diff_warnings,
+        )
+
+        write_session_text(session=session, file_name="diff.patch", content=unified_diff)
+
+        if diff_warnings:
+            write_session_json(session=session, file_name="diff_warnings.json", data={"warnings": diff_warnings})
+        else:
+            _delete_session_files(session.path, ["diff_warnings.json"])
+
+        validation_result = validate_diff_patch(
+            workspace_root=workspace_root,
+            session=session,
+            diff_text=unified_diff,
+        )
+        write_session_json(session=session, file_name="diff_validation.json", data=validation_result.to_dict())
+
+        check_patch(workspace_root=workspace_root, session=session)
+        write_session_json(
+            session=session,
+            file_name="diff_check.json",
+            data={
+                "git_apply_check": "passed",
+                "patch_path": str(session.path / "diff.patch"),
+            },
+        )
+
+        instruction = read_session_text(session, "user_request.txt")
+        change_summary = build_change_summary_markdown(
+            request=instruction,
+            file_changes=file_changes,
+            warnings=diff_warnings,
+            plan_constraints_status=plan_constraints_check["status"],
+        )
+        semantic_review = build_semantic_review_json(
+            request=instruction,
+            file_changes=file_changes,
+            warnings=diff_warnings,
+            plan_constraints_status=plan_constraints_check["status"],
+            plan=plan_constraints,
+            plan_constraints_check=plan_constraints_check,
+        )
+
+        write_session_text(session=session, file_name="change_summary.md", content=change_summary)
+        write_session_json(session=session, file_name="semantic_review.json", data=semantic_review)
+
+        repair_metadata["status"] = "succeeded"
+        write_repair_metadata(session, repair_metadata)
+
+        _delete_session_files(
+            session.path,
+            [
+                "file_changes_error.txt",
+                "diff_error.txt",
+                "operation_error.json",
+                "operation_error.md",
+                "diff_validation_error.txt",
+                "diff_check_error.txt",
+            ],
+        )
+
+        session = update_session_status(session, "diff_validated")
+
+        console.print("[green]Repair generated a new diff successfully.[/green]\n")
+        console.print(f"Session: {session.metadata.id}")
+        console.print(f"Status:  {session.metadata.status}")
+        console.print(f"Reason:  {repair_context['reason']}")
+        console.print(f"Prompt:  {prompt_template.ref}")
+        console.print(f"Model:   {model or settings.model}")
+
+        console.print("\n[bold]Files changed[/bold]")
+        for change in file_changes.changes:
+            descriptor = change.mode
+            if change.operation:
+                descriptor = f"{descriptor} / {change.operation}"
+            console.print(f"  - {change.path} [{change.change_type}] {descriptor}")
+
+        console.print("\n[bold]Artifacts[/bold]")
+        console.print(f"  - repair_metadata.json: {session.path / 'repair_metadata.json'}")
+        console.print(f"  - repair_prompt.md: {session.path / 'repair_prompt.md'}")
+        console.print(f"  - repair_raw_response.json: {session.path / 'repair_raw_response.json'}")
+        console.print(f"  - diff.patch: {session.path / 'diff.patch'}")
+        console.print(f"  - change_summary.md: {session.path / 'change_summary.md'}")
+        console.print(f"  - semantic_review.json: {session.path / 'semantic_review.json'}")
+
+        console.print("\n[bold]Validations[/bold]")
+        console.print("  - Forge safety validation: passed")
+        console.print("  - git apply --check: passed")
+
+        console.print("\n[bold]Next[/bold]")
+        console.print("  trevvos test --sandbox")
+
+    except (FileChangeOutputError, DiffValidationError, ApplyError, ForgeError) as exc:
+        if session is not None:
+            error_message = str(exc)
+            if repair_metadata is not None:
+                repair_metadata["status"] = "failed"
+                repair_metadata["error"] = error_message
+                write_repair_metadata(session, repair_metadata)
+            elif repair_context is not None:
+                failed_metadata = build_repair_metadata(
+                    session=session,
+                    prompt_ref="repair_file_changes@1.0.0",
+                    status="failed",
+                    reason=repair_context.get("reason", "unknown"),
+                    evidence_used=repair_context.get("evidence_used", []),
+                    error=error_message,
+                )
+                write_repair_metadata(session, failed_metadata)
+
+            write_session_text(session=session, file_name="diff_error.txt", content=error_message)
+            write_operation_error_artifacts(session, error_message)
+            update_session_status(session, "diff_generation_failed")
+
+        console.print("\n[red]Repair failed.[/red]")
+        print_error(str(exc))
+        if session is not None:
+            console.print("\n[bold]Repair artifacts[/bold]")
+            console.print(f"  - {session.path / 'repair_metadata.json'}")
+            console.print(f"  - {session.path / 'repair_prompt.md'}")
             console.print("\n[bold]Operation error artifacts[/bold]")
             console.print(f"  - {session.path / 'operation_error.json'}")
             console.print(f"  - {session.path / 'operation_error.md'}")

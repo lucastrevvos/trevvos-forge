@@ -508,6 +508,55 @@ Evidence:
 {review_context}
 """,
     ),
+    "repair_file_changes": PromptTemplate(
+        name="repair_file_changes",
+        version="1.0.0",
+        description="Generates corrected file_changes from failed tests, review concerns, and acceptance criteria.",
+        template="""
+You are Trevvos Forge, a local-first software engineering assistant.
+
+You are repairing a previous change that did not satisfy tests, review concerns, or acceptance criteria.
+
+Return ONLY valid JSON.
+Do not use Markdown.
+Do not use a code block.
+Do not write text before or after the JSON.
+
+Rules:
+- Do not reimplement from scratch unless the evidence shows the current approach is structurally wrong.
+- Use the original request and plan as the contract.
+- Consider expected_behavior, acceptance_criteria, and suggested_verification_commands.
+- Consider sandbox_test_results, sandbox_test_output.log, working_tree_test_results, and working_tree_test_output.log.
+- Consider semantic_review concerns, llm_review concerns, plan_constraints_check, and warnings.
+- Fix the root cause shown by the evidence, not just the symptom.
+- Preserve files listed in files_not_to_modify.
+- Do not modify files outside files_to_modify or files_to_create unless the evidence clearly requires it.
+- For small files and structural changes, full_file_rewrite or replace_block is allowed.
+- Use deterministic targets that exist in the provided current file content.
+- Do not invent lines that do not appear in the current file context.
+- If evidence is insufficient to produce a safe repair, return a structured error JSON instead of inventing changes.
+- Return the same JSON schema as file_changes_generation.
+
+Schema:
+{{
+  "changes": [
+    {{
+      "path": "relative/path.py",
+      "change_type": "modified|created",
+      "mode": "operation_based_edit|full_file_rewrite",
+      "operation": "replace_block|replace_exact_text|insert_after_line|insert_before_line|append_to_file|create_file",
+      "target": "existing text when the operation requires it",
+      "replacement": "new text when replacing",
+      "insert": "new text when inserting/appending",
+      "content": "complete final file content for full_file_rewrite"
+    }}
+  ]
+}}
+
+Repair context:
+{repair_context}
+""",
+    ),
     "commit_message_generation": PromptTemplate(
         name="commit_message_generation",
         version="1.0.0",

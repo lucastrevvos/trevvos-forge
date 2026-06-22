@@ -46,16 +46,17 @@ trevvos test --sandbox
 
 ### `trevvos tests add`
 
-Generates or appends unit tests for a Python symbol. By default it is a dry-run: it creates a session, writes auditable artifacts, validates the patch with `git apply --check`, and does not modify the working tree.
+Generates or appends unit tests for a Python symbol. By default it is a dry-run: it creates a session, writes auditable artifacts, validates the patch with `git apply --check`, applies the patch in a temporary sandbox, runs the detected test command there, and does not modify the working tree.
 
 ```bash
 trevvos tests add calculator.py --symbol divide
 trevvos tests add calculator.py --all
 trevvos tests add calculator.py --symbol divide --test-file tests/test_calculator.py
 trevvos tests add calculator.py --symbol divide --write
+trevvos tests add calculator.py --symbol divide --keep-sandbox
 ```
 
-With `--write`, Forge applies the generated patch only after confirmation, or immediately with `--yes`. The destination must be inside a test directory or match `test_*.py` / `*_test.py`.
+With `--write`, Forge applies the generated patch only after sandbox tests pass and after confirmation, or immediately with `--yes`. A sandbox failure blocks writing even with `--yes`. The destination must be inside a test directory or match `test_*.py` / `*_test.py`.
 Use `--symbol` for one function/class or `--all` for all public testable symbols in a Python file. The options are mutually exclusive.
 
 ### `trevvos review`
@@ -108,6 +109,7 @@ Execution Mode includes:
 - generated patch validation;
 - test-file-only validation for `trevvos tests add`;
 - `git apply --check`;
+- sandbox validation before `trevvos tests add --write`;
 - sandbox testing;
 - retry metadata;
 - repair metadata;

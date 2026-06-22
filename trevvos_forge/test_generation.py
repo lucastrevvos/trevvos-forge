@@ -3,6 +3,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from trevvos_forge.config_store import load_config
 from trevvos_forge.exceptions import DiffError, WorkspaceError
 from trevvos_forge.file_change_outputs import FileChangesOutput
 
@@ -315,8 +316,11 @@ def metadata_for_target(
     prompt_ref: str,
     status: str,
     files_changed: list[str],
+    sandbox_status: str | None = None,
+    sandbox_commands: list[str] | None = None,
+    write_allowed: bool | None = None,
 ) -> dict:
-    return {
+    metadata = {
         "mode": "controlled_execution",
         "command": "tests add",
         "source_path": target.source_path,
@@ -331,6 +335,33 @@ def metadata_for_target(
         "framework": target.framework,
         "test_type": "unit",
     }
+
+    if sandbox_status is not None:
+        metadata["sandbox"] = {
+            "enabled": True,
+            "status": sandbox_status,
+            "commands": sandbox_commands or [],
+        }
+
+    if write_allowed is not None:
+        metadata["write_allowed"] = write_allowed
+
+    return metadata
+
+
+def select_test_generation_commands(*, workspace_root: Path, target: TestGenerationTarget) -> tuple[list[str], str]:
+    config = load_config(workspace_root)
+    configured = config.get("test_commands")
+
+    if isinstance(configured, list):
+        commands = [command.strip() for command in configured if isinstance(command, str) and command.strip()]
+        if commands:
+            return commands, "configured"
+
+    if target.framework == "pytest":
+        return ["pytest"], "detected"
+
+    return ["python -m unittest discover -s tests"], "detected"
 
 
 def raw_response_json(raw_response: str) -> dict:

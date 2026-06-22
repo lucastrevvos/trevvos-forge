@@ -110,6 +110,7 @@ from trevvos_forge.status_workflow import (
     write_session_status,
 )
 from trevvos_forge.test_runner import (
+    CommandSpec,
     TestRunResult,
     load_test_commands,
     load_plan_verification_commands,
@@ -125,6 +126,7 @@ from trevvos_forge.test_generation import (
     build_test_generation_target,
     metadata_for_target,
     raw_response_json,
+    select_test_generation_commands,
     validate_file_changes_are_tests_only,
 )
 from trevvos_forge.timeline import append_timeline_event, write_timeline_markdown
@@ -365,6 +367,19 @@ def _delete_session_files(session_path: Path, file_names: list[str]) -> None:
 
         if file_path.exists():
             file_path.unlink()
+
+
+def _write_test_sandbox_aliases(session_path: Path) -> None:
+    aliases = {
+        "sandbox_test_results.json": "test_sandbox_results.json",
+        "sandbox_test_output.log": "test_sandbox_output.log",
+    }
+
+    for source_name, alias_name in aliases.items():
+        source_path = session_path / source_name
+
+        if source_path.exists():
+            (session_path / alias_name).write_text(source_path.read_text(encoding="utf-8"), encoding="utf-8")
 
 
 def _record_timeline_event(session, event: str, command: str, status: str, **fields) -> None:
@@ -3705,6 +3720,14 @@ def tests_add(
         bool,
         typer.Option("--write", help="Apply the generated test patch after validation and confirmation."),
     ] = False,
+    timeout: Annotated[
+        int,
+        typer.Option("--timeout", help="Timeout per sandbox test command in seconds."),
+    ] = 120,
+    keep_sandbox: Annotated[
+        bool,
+        typer.Option("--keep-sandbox", help="Keep the sandbox directory after running generated tests."),
+    ] = False,
     yes: Annotated[
         bool,
         typer.Option("--yes", "-y", help="Apply without interactive confirmation when --write is used."),
@@ -3823,13 +3846,59 @@ def tests_add(
             {"git_apply_check": "passed", "patch_path": str(session.path / "test_diff.patch")},
         )
 
+        test_commands, command_source = select_test_generation_commands(
+            workspace_root=workspace_root,
+            target=target,
+        )
+        command_specs = [CommandSpec(command=command, source=command_source) for command in test_commands]
+        _record_timeline_event(
+            session,
+            "tests_add_sandbox_started",
+            command_text,
+            "started",
+            test_commands=test_commands,
+            keep_sandbox=keep_sandbox,
+        )
+        sandbox_result = run_test_specs_in_sandbox(
+            repo_root=workspace_root,
+            patch_path=session.path / "test_diff.patch",
+            command_specs=command_specs,
+            timeout_seconds=timeout,
+            keep_sandbox=keep_sandbox,
+        )
+        write_test_artifacts(session.path, sandbox_result)
+        _write_test_sandbox_aliases(session.path)
+
+        sandbox_metadata = sandbox_result.sandbox or {}
+        sandbox_event = "tests_add_sandbox_completed" if sandbox_result.status == "passed" else "tests_add_sandbox_failed"
+        _record_timeline_event(
+            session,
+            sandbox_event,
+            command_text,
+            "succeeded" if sandbox_result.status == "passed" else "failed",
+            reason=None if sandbox_result.status == "passed" else sandbox_result.status,
+            artifacts=[
+                "test_sandbox_results.json",
+                "test_sandbox_output.log",
+                "sandbox_test_results.json",
+                "sandbox_test_output.log",
+            ],
+            test_status=sandbox_result.status,
+            patch_apply_check=sandbox_metadata.get("patch_apply_check", "unknown"),
+            patch_apply=sandbox_metadata.get("patch_apply", "unknown"),
+        )
+
         files_changed = [change.path for change in file_changes.changes]
+        write_allowed = sandbox_result.status == "passed"
         metadata = metadata_for_target(
             target=target,
             write=write,
             prompt_ref=prompt_template.ref,
             status="diff_ready",
             files_changed=files_changed,
+            sandbox_status=sandbox_result.status,
+            sandbox_commands=test_commands,
+            write_allowed=write_allowed,
         )
         write_session_json(session, "test_generation_metadata.json", metadata)
         write_session_text(
@@ -3856,8 +3925,11 @@ def tests_add(
                 "test_generation_metadata.json",
                 "test_generation_summary.md",
                 "test_generation_validation.json",
+                "test_sandbox_results.json",
+                "test_sandbox_output.log",
             ],
             files_changed=files_changed,
+            sandbox_status=sandbox_result.status,
         )
 
         if not write:
@@ -3865,7 +3937,10 @@ def tests_add(
             if json_output:
                 console.print(json.dumps({**metadata, "session_id": session.metadata.id}, indent=2))
                 return
-            console.print("[green]Test patch generated but not applied.[/green]\n")
+            if sandbox_result.status == "passed":
+                console.print("[green]Test patch generated and validated in sandbox.[/green]\n")
+            else:
+                console.print("[yellow]Test patch generated but sandbox tests failed.[/yellow]\n")
             console.print(f"Session: {session.metadata.id}")
             console.print(f"Status:  {session.metadata.status}")
             console.print(f"Prompt:  {prompt_template.ref}")
@@ -3875,13 +3950,32 @@ def tests_add(
             console.print("\n[bold]Artifacts[/bold]")
             console.print(f"  - {session.path / 'test_diff.patch'}")
             console.print(f"  - {session.path / 'test_file_changes.json'}")
+            console.print(f"  - {session.path / 'test_sandbox_results.json'}")
+            console.print(f"  - {session.path / 'test_sandbox_output.log'}")
             console.print(f"  - {session.path / 'test_generation_metadata.json'}")
             console.print("\n[bold]Validations[/bold]")
             console.print("  - test-file-only safety validation: passed")
             console.print("  - git apply --check: passed")
+            console.print(f"  - sandbox tests: {sandbox_result.status}")
             console.print("\n[bold]Next[/bold]")
-            console.print("  Re-run with `--write` to apply after review, or inspect test_diff.patch.")
+            if sandbox_result.status == "passed":
+                console.print("  Re-run with `--write` to apply after review, or inspect test_diff.patch.")
+            else:
+                console.print("  Review test_sandbox_output.log before writing.")
             return
+
+        if not write_allowed:
+            _record_timeline_event(
+                session,
+                "tests_add_write_blocked",
+                command_text,
+                "failed",
+                reason="sandbox_failed",
+                artifacts=["test_sandbox_results.json", "test_sandbox_output.log"],
+            )
+            console.print("[red]Cannot write test patch because sandbox tests failed.[/red]")
+            console.print(f"Review {session.path / 'test_sandbox_output.log'}.")
+            raise typer.Exit(code=1)
 
         console.print("[green]About to apply generated test patch:[/green]\n")
         console.print(f"Session: {session.metadata.id}")
@@ -3891,7 +3985,7 @@ def tests_add(
         console.print("\n[bold]Patch[/bold]")
         console.print(f"  {session.path / 'test_diff.patch'}")
 
-        if not yes and not typer.confirm("Apply this test-only patch?", default=False):
+        if not yes and not typer.confirm("Apply generated test patch to working tree?", default=False):
             update_session_status(session, "tests_add_cancelled")
             _record_timeline_event(
                 session,
@@ -3906,7 +4000,7 @@ def tests_add(
         apply_result = apply_patch(workspace_root=workspace_root, session=session)
         write_session_json(session, "test_apply_result.json", apply_result.to_dict())
         session = update_session_status(session, "tests_applied")
-        metadata = {**metadata, "status": "applied"}
+        metadata = {**metadata, "status": "applied", "write_allowed": True}
         write_session_json(session, "test_generation_metadata.json", metadata)
         _record_timeline_event(
             session,

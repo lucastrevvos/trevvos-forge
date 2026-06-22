@@ -12,8 +12,10 @@ from trevvos_forge.test_generation import (
     TEST_FILE_ERROR,
     build_test_generation_target,
     detect_testable_python_symbols,
+    select_test_generation_commands,
     validate_test_file_path,
 )
+from trevvos_forge.timeline import read_timeline
 
 
 class TestsAddCommandTests(unittest.TestCase):
@@ -177,8 +179,46 @@ class TestsAddCommandTests(unittest.TestCase):
             metadata = _read_json(session_dir / "test_generation_metadata.json")
 
             self.assertTrue((session_dir / "test_diff.patch").exists())
+            self.assertTrue((session_dir / "test_sandbox_results.json").exists())
+            sandbox_results = _read_json(session_dir / "test_sandbox_results.json")
+            self.assertEqual(sandbox_results["status"], "passed")
             self.assertFalse(metadata["write"])
+            self.assertEqual(metadata["sandbox"]["status"], "passed")
+            self.assertTrue(metadata["write_allowed"])
             self.assertEqual(metadata["test_file"], "tests/test_calculator.py")
+
+    def test_dry_run_keeps_sandbox_when_requested(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider(_create_test_file_response())
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(
+                    app,
+                    [
+                        "tests",
+                        "add",
+                        "calculator.py",
+                        "--symbol",
+                        "divide",
+                        "--keep-sandbox",
+                        "--path",
+                        str(root),
+                    ],
+                )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertFalse((root / "tests" / "test_calculator.py").exists())
+            sandbox_results = _read_json(_only_session(root) / "test_sandbox_results.json")
+            sandbox_path = Path(sandbox_results["sandbox"]["path"])
+
+            try:
+                self.assertTrue((sandbox_path / "tests" / "test_calculator.py").exists())
+                self.assertTrue(sandbox_results["sandbox"]["kept"])
+            finally:
+                _remove_tree(sandbox_path)
 
     def test_all_dry_run_does_not_change_working_tree(self) -> None:
         runner = CliRunner()
@@ -212,6 +252,32 @@ class TestsAddCommandTests(unittest.TestCase):
             self.assertEqual((root / "calculator.py").read_text(encoding="utf-8"), original_source)
             self.assertTrue((root / "tests" / "test_calculator.py").exists())
             self.assertTrue((_only_session(root) / "test_apply_result.json").exists())
+
+    def test_write_blocks_when_sandbox_fails(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            original_source = (root / "calculator.py").read_text(encoding="utf-8")
+            provider = _FakeProvider(_create_failing_test_file_response())
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(
+                    app,
+                    ["tests", "add", "calculator.py", "--symbol", "divide", "--write", "--yes", "--path", str(root)],
+                )
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn("Cannot write test patch because sandbox tests failed", result.output)
+            self.assertEqual((root / "calculator.py").read_text(encoding="utf-8"), original_source)
+            self.assertFalse((root / "tests" / "test_calculator.py").exists())
+            session_dir = _only_session(root)
+            sandbox_results = _read_json(session_dir / "test_sandbox_results.json")
+            metadata = _read_json(session_dir / "test_generation_metadata.json")
+
+            self.assertEqual(sandbox_results["status"], "failed")
+            self.assertFalse(metadata["write_allowed"])
+            self.assertFalse((session_dir / "test_apply_result.json").exists())
 
     def test_all_write_applies_patch_and_preserves_source(self) -> None:
         runner = CliRunner()
@@ -306,7 +372,12 @@ class TestsAddCommandTests(unittest.TestCase):
                                 "change_type": "modified",
                                 "mode": "operation_based_edit",
                                 "operation": "append_to_file",
-                                "insert": "\n\ndef test_divide_new():\n    assert True\n",
+                                "insert": (
+                                    "\n\nimport unittest\n\n"
+                                    "class TestGeneratedCalculator(unittest.TestCase):\n"
+                                    "    def test_divide_new(self):\n"
+                                    "        self.assertTrue(True)\n"
+                                ),
                             }
                         ]
                     }
@@ -346,8 +417,77 @@ class TestsAddCommandTests(unittest.TestCase):
                 "test_diff.patch",
                 "test_generation_metadata.json",
                 "test_generation_summary.md",
+                "test_sandbox_results.json",
+                "test_sandbox_output.log",
             ]:
                 self.assertTrue((session_dir / artifact).exists(), artifact)
+
+    def test_sandbox_output_log_contains_command(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider(_create_test_file_response())
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(app, ["tests", "add", "calculator.py", "--symbol", "divide", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            output_log = (_only_session(root) / "test_sandbox_output.log").read_text(encoding="utf-8")
+
+            self.assertIn("python -m unittest discover -s tests", output_log)
+            self.assertIn("Patch apply: passed", output_log)
+
+    def test_configured_test_command_is_used_for_sandbox(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            (root / ".trevvos").mkdir()
+            (root / ".trevvos" / "config.json").write_text(
+                json.dumps({"test_commands": ["python -m unittest discover -s tests"]}),
+                encoding="utf-8",
+            )
+            provider = _FakeProvider(_create_test_file_response())
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(app, ["tests", "add", "calculator.py", "--symbol", "divide", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            sandbox_results = _read_json(_only_session(root) / "test_sandbox_results.json")
+
+            self.assertEqual(sandbox_results["commands"][0]["source"], "configured")
+
+    def test_selects_pytest_when_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+            target = build_test_generation_target(
+                workspace_root=root,
+                source_path=Path("calculator.py"),
+                symbol="divide",
+            )
+
+            commands, source = select_test_generation_commands(workspace_root=root, target=target)
+
+            self.assertEqual(commands, ["pytest"])
+            self.assertEqual(source, "detected")
+
+    def test_timeline_records_sandbox_events(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider(_create_test_file_response())
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(app, ["tests", "add", "calculator.py", "--symbol", "divide", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            events = [event["event"] for event in read_timeline(_only_session(root))]
+
+            self.assertIn("tests_add_sandbox_started", events)
+            self.assertIn("tests_add_sandbox_completed", events)
 
     def test_help(self) -> None:
         result = CliRunner().invoke(app, ["tests", "add", "--help"])
@@ -356,6 +496,7 @@ class TestsAddCommandTests(unittest.TestCase):
         self.assertIn("--symbol", result.output)
         self.assertIn("--all", result.output)
         self.assertIn("--write", result.output)
+        self.assertIn("--keep-sandbox", result.output)
 
     def test_json_output(self) -> None:
         runner = CliRunner()
@@ -437,6 +578,27 @@ def _create_test_file_response() -> str:
     )
 
 
+def _create_failing_test_file_response() -> str:
+    return json.dumps(
+        {
+            "changes": [
+                {
+                    "path": "tests/test_calculator.py",
+                    "change_type": "created",
+                    "mode": "operation_based_edit",
+                    "operation": "create_file",
+                    "content": (
+                        "import unittest\n\n\n"
+                        "class TestGeneratedFailure(unittest.TestCase):\n"
+                        "    def test_failure(self):\n"
+                        "        self.assertEqual(1, 2)\n"
+                    ),
+                }
+            ]
+        }
+    )
+
+
 def _create_all_test_file_response() -> str:
     return json.dumps(
         {
@@ -471,6 +633,12 @@ def _only_session(root: Path) -> Path:
 
 def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _remove_tree(path: Path) -> None:
+    import shutil
+
+    shutil.rmtree(path, ignore_errors=True)
 
 
 class _FakeProvider:

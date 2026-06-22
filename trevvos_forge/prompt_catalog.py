@@ -113,6 +113,9 @@ Behavior-first planning rules:
 - If expected behavior includes an executable command, include that exact command or an equivalent command in suggested_verification_commands.
 - For CLI tasks, suggested_verification_commands must include runtime CLI commands, not only py_compile/build commands.
 - For each expected behavior command, include a verification command that exercises it.
+- When the user asks to add a CLI command or operation, preserve existing CLI commands unless explicitly asked to remove or replace them.
+- Acceptance criteria must include preservation of existing commands.
+- Suggested verification commands should include at least one smoke command for existing CLI behavior when an existing CLI is modified.
 - Separate Files to create, Files to modify, and Files not to modify.
 - If the user asks for a CLI, treat CLI as an executable command interface, not only a function listing, unless the user explicitly asks only to list functions.
 - For a simple Python CLI, prefer argparse, a main() function, if __name__ == "__main__": main(), subcommands registered before parse_args(), and dispatch inside main().
@@ -161,6 +164,7 @@ Example for Python CLI:
 - Expected behavior: python main.py add 2 3 prints 5; python main.py divide 10 0 prints a friendly error.
 - Acceptance criteria: The CLI uses argparse; subcommands are registered before parse_args(); runtime dispatch happens inside main().
 - Suggested commands to verify: python -m py_compile main.py calculator.py; python main.py add 2 3; python main.py divide 10 2; python main.py divide 10 0.
+- Preservation criteria: sqrt is added without removing existing add, subtract, multiply, and divide commands.
 
 Correct verification coverage example:
 {{
@@ -230,6 +234,9 @@ Behavior-first planning rules:
 - If expected behavior includes an executable command, include that exact command or an equivalent command in suggested_verification_commands.
 - For CLI tasks, suggested_verification_commands must include runtime CLI commands, not only py_compile/build commands.
 - For each expected behavior command, include a verification command that exercises it.
+- When the user asks to add a CLI command or operation, preserve existing CLI commands unless explicitly asked to remove or replace them.
+- Acceptance criteria must include preservation of existing commands.
+- Suggested verification commands should include regression commands for existing CLI behavior when an existing CLI is modified.
 - Separate files_to_create, files_to_modify, and files_not_to_modify.
 - If the user asks for a CLI, treat CLI as an executable command interface.
 - For a simple Python CLI, prefer argparse, a main() function, if __name__ == "__main__": main(), subcommands registered before parse_args(), and dispatch inside main().
@@ -356,6 +363,10 @@ Trate "Files not to modify" nas constraints do plano como hard constraints.
 Nao modifique arquivos listados em "Files not to modify".
 Prefira criar arquivos listados em "Files to create".
 Prefira modificar apenas arquivos listados em "Files to modify".
+For additive CLI changes, do not replace existing subcommands or dispatch branches.
+Add new parser/dispatch cases instead of replacing existing ones.
+Preserve existing add/subtract/multiply/divide commands unless the user explicitly asks to remove them.
+If you modify a CLI, ensure existing commands still have parsers, arguments, and dispatch branches.
 Se o plano pede uma CLI, implemente comportamento executavel compatível com Expected behavior.
 Nao apenas liste funcoes quando Expected behavior exigir comandos executaveis.
 Se a mudanca nao puder ser feita respeitando as constraints, retorne um erro estruturado em vez de inventar alteracoes.
@@ -599,6 +610,10 @@ Regras de retry:
 - Se o erro for ambiguous_target, escolha uma operacao mais precisa, um bloco maior, ou full_file_rewrite para arquivo pequeno.
 - Se o erro for mixed_modes, gere uma sequencia compativel usando apenas um modo por arquivo.
 - Preserve arquivos que o plano diz para nao alterar.
+- For additive CLI changes, do not replace existing subcommands or dispatch branches.
+- Add new parser/dispatch cases instead of replacing existing ones.
+- Preserve existing add/subtract/multiply/divide commands unless the user explicitly asks to remove them.
+- If you modify a CLI, ensure existing commands still have parsers, arguments, and dispatch branches.
 - Nao invente linhas que nao existem.
 - Nao copie numeros de linha para o conteudo final.
 - Nao use placeholders como "...".
@@ -745,6 +760,11 @@ Rules:
 - All operation targets must exist in the current workspace content provided below.
 - Do not target content that appears only in the failed candidate patch.
 - Preserve files listed in files_not_to_modify.
+- For additive CLI changes, do not replace existing subcommands or dispatch branches.
+- Add new parser/dispatch cases instead of replacing existing ones.
+- Preserve existing add/subtract/multiply/divide commands unless the user explicitly asks to remove them.
+- If CLI regression evidence says a command was removed, repair must preserve existing commands and add the new command without replacing them.
+- If you modify a CLI, ensure existing commands still have parsers, arguments, and dispatch branches.
 - Do not modify files outside files_to_modify or files_to_create unless the evidence clearly requires it.
 - For small files and structural changes, full_file_rewrite or replace_block is allowed.
 - Small-file rewrite policy: for small files (<= 120 lines) with structural or behavioral errors, prefer full_file_rewrite or a wide replace_block.

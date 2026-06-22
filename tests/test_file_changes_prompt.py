@@ -46,6 +46,8 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("suggested_verification_commands", prompt)
         self.assertIn("not only py_compile", prompt)
         self.assertIn("exact command or an equivalent command", prompt)
+        self.assertIn("preserve existing CLI commands", prompt)
+        self.assertIn("preservation of existing commands", prompt)
 
     def test_plan_retry_prompt_contains_schema_rules(self) -> None:
         prompt = get_prompt("plan_retry").render(
@@ -63,6 +65,8 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("files_not_to_modify", prompt)
         self.assertIn("not only py_compile", prompt)
         self.assertIn("exact command or an equivalent command", prompt)
+        self.assertIn("preserve existing CLI commands", prompt)
+        self.assertIn("regression commands", prompt)
         self.assertIn("retry context", prompt)
 
     def test_prompt_contains_markdown_editing_rules(self) -> None:
@@ -131,6 +135,9 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn('"mode": "full_file_rewrite"', prompt)
         self.assertIn("Do not invent operation names", prompt)
         self.assertIn("The incorrect example above must never be used", prompt)
+        self.assertIn("do not replace existing subcommands", prompt)
+        self.assertIn("Add new parser/dispatch cases", prompt)
+        self.assertIn("ensure existing commands still have parsers", prompt)
 
     def test_semantic_patch_review_prompt_contains_safety_rules(self) -> None:
         prompt = get_prompt("semantic_patch_review").render(
@@ -182,6 +189,8 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("top-level `changes`", prompt)
         self.assertIn("Allowed operations", prompt)
         self.assertIn("Never use full_file_rewrite as an operation", prompt)
+        self.assertIn("do not replace existing subcommands", prompt)
+        self.assertIn("Add new parser/dispatch cases", prompt)
 
     def test_repair_file_changes_prompt_contains_repair_evidence_rules(self) -> None:
         prompt = get_prompt("repair_file_changes").render(
@@ -218,6 +227,8 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("not against the previously proposed patch", prompt)
         self.assertIn("targets must exist in the current workspace content", prompt)
         self.assertIn("prefer mode: full_file_rewrite", prompt)
+        self.assertIn("do not replace existing subcommands", prompt)
+        self.assertIn("add the new command without replacing", prompt)
 
     def test_commit_message_prompt_contains_safety_rules(self) -> None:
         prompt = get_prompt("commit_message_generation").render(

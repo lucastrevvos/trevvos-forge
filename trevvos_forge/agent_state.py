@@ -109,6 +109,20 @@ def determine_agent_state(session_dir: Path) -> AgentState:
             evidence=evidence,
         )
 
+    if _cli_regression_failed(evidence):
+        return _state(
+            session_id=session_id,
+            phase="cli_regression_failed",
+            status="needs_repair",
+            reason="CLI regression check failed.",
+            next_action="repair",
+            next_command="trevvos repair",
+            confidence="high",
+            blockers=blockers,
+            warnings=warnings,
+            evidence=evidence,
+        )
+
     if isinstance(evidence["file_changes_error"], dict):
         return _state(
             session_id=session_id,
@@ -344,6 +358,7 @@ def _collect_evidence(session_dir: Path, metadata: Any) -> dict:
         "operation_error": _read_json(session_dir / "operation_error.json"),
         "plan_constraints_check": _read_json(session_dir / "plan_constraints_check.json"),
         "verification_coverage": _read_json(session_dir / "verification_coverage.json"),
+        "cli_regression_check": _read_json(session_dir / "cli_regression_check.json"),
         "sandbox_test_results": sandbox,
         "working_tree_test_results": working_tree,
         "semantic_review": _read_json(session_dir / "semantic_review.json"),
@@ -392,6 +407,7 @@ def _evidence_summary(evidence: dict) -> dict:
         "has_plan": evidence.get("has_plan"),
         "has_plan_error": isinstance(evidence.get("plan_error"), dict),
         "verification_coverage_status": _verification_coverage_status(evidence.get("verification_coverage")),
+        "cli_regression_status": _cli_regression_status(evidence.get("cli_regression_check")),
         "has_diff": evidence.get("has_diff"),
         "has_file_changes": evidence.get("has_file_changes"),
         "sandbox_status": _test_status(evidence.get("sandbox_test_results")),
@@ -434,11 +450,22 @@ def _verification_coverage_failed(evidence: dict) -> bool:
     return _verification_coverage_status(evidence.get("verification_coverage")) == "failed"
 
 
+def _cli_regression_failed(evidence: dict) -> bool:
+    return _cli_regression_status(evidence.get("cli_regression_check")) == "failed"
+
+
 def _verification_coverage_status(payload: Any) -> str:
     if not isinstance(payload, dict):
         return "not_run"
     status = payload.get("status")
     return status if status in {"passed", "warning", "failed"} else "unknown"
+
+
+def _cli_regression_status(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return "not_applicable"
+    status = payload.get("status")
+    return status if status in {"passed", "warning", "failed", "not_applicable"} else "unknown"
 
 
 def _review_has_concerns(evidence: dict) -> bool:

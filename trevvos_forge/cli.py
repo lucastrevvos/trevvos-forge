@@ -18,6 +18,7 @@ from trevvos_forge.commit_workflow import (
     run_git_commit,
     write_commit_artifacts,
 )
+from trevvos_forge.cli_regression_check import build_cli_regression_check, write_cli_regression_check
 from trevvos_forge.context_builder import build_context
 from trevvos_forge.diff_builder import build_unified_diff_from_file_changes
 from trevvos_forge.diff_validation import validate_diff_patch
@@ -1559,6 +1560,12 @@ def diff(
                 request=instruction,
             )
         )
+        cli_regression_check = build_cli_regression_check(
+            workspace_root=workspace_root,
+            file_changes=file_changes,
+        )
+        write_cli_regression_check(session, cli_regression_check)
+        diff_warnings.extend(cli_regression_check.get("warnings", []))
 
         unified_diff = build_unified_diff_from_file_changes(
             workspace_root=workspace_root,
@@ -1618,6 +1625,7 @@ def diff(
             plan=plan_constraints,
             plan_constraints_check=plan_constraints_check,
             verification_coverage=_read_json_file(session.path / "verification_coverage.json"),
+            cli_regression_check=cli_regression_check,
         )
 
         write_session_text(
@@ -1660,6 +1668,7 @@ def diff(
                 "file_changes_raw_response.json",
                 "file_changes.json",
                 "plan_constraints_check.json",
+                "cli_regression_check.json",
                 "diff.patch",
                 "diff_validation.json",
                 "diff_check.json",
@@ -1997,6 +2006,12 @@ def repair(
                 request=instruction,
             )
         )
+        cli_regression_check = build_cli_regression_check(
+            workspace_root=workspace_root,
+            file_changes=file_changes,
+        )
+        write_cli_regression_check(session, cli_regression_check)
+        diff_warnings.extend(cli_regression_check.get("warnings", []))
 
         unified_diff = build_unified_diff_from_file_changes(
             workspace_root=workspace_root,
@@ -2042,6 +2057,7 @@ def repair(
             plan=plan_constraints,
             plan_constraints_check=plan_constraints_check,
             verification_coverage=_read_json_file(session.path / "verification_coverage.json"),
+            cli_regression_check=cli_regression_check,
         )
 
         write_session_text(session=session, file_name="change_summary.md", content=change_summary)

@@ -69,6 +69,16 @@ class AgentStateTests(unittest.TestCase):
             self.assertEqual(state.phase, "verification_coverage_failed")
             self.assertEqual(state.next_command, "trevvos plan --retry")
 
+    def test_cli_regression_failed_recommends_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            session_dir = _session(Path(temporary_directory), plan=True, diff=True)
+            _write_json(session_dir / "cli_regression_check.json", {"status": "failed"})
+
+            state = determine_agent_state(session_dir)
+
+            self.assertEqual(state.phase, "cli_regression_failed")
+            self.assertEqual(state.next_command, "trevvos repair")
+
     def test_plan_without_diff_recommends_diff(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             session_dir = _session(Path(temporary_directory), plan=True)

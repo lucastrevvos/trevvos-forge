@@ -23,6 +23,7 @@ def build_repair_context(session: ForgeSession, repo_root: Path, source: str | N
     _validate_repairable_diff(session.path, file_changes)
     semantic_review = _read_json_file(session.path / "semantic_review.json")
     llm_review = _read_json_file(session.path / "llm_review.json")
+    cli_regression_check = _read_json_file(session.path / "cli_regression_check.json")
     operation_error = _read_json_file(session.path / "operation_error.json")
     sandbox_test_results = _read_json_file(session.path / "sandbox_test_results.json")
     working_tree_test_results = _read_json_file(session.path / "working_tree_test_results.json")
@@ -49,6 +50,7 @@ def build_repair_context(session: ForgeSession, repo_root: Path, source: str | N
         working_tree_test_results=working_tree_test_results,
         semantic_review=semantic_review,
         llm_review=llm_review,
+        cli_regression_check=cli_regression_check,
     )
 
     if reason is None:
@@ -86,9 +88,10 @@ def build_repair_context(session: ForgeSession, repo_root: Path, source: str | N
         "working_tree_test_output_tail": _tail_lines(working_tree_log or "", LOG_TAIL_LINE_LIMIT),
         "semantic_review": semantic_review,
         "llm_review": llm_review,
+        "cli_regression_check": cli_regression_check,
         "operation_error": operation_error,
         "plan_constraints_check": plan_constraints_check,
-        "warnings": _warnings(diff_warnings, semantic_review, llm_review),
+        "warnings": _warnings(diff_warnings, semantic_review, llm_review, cli_regression_check),
         "current_files": [
             _current_file_context(repo_root=repo_root, relative_path=path)
             for path in relevant_paths
@@ -143,6 +146,12 @@ def render_repair_context(context: dict) -> str:
             "",
             "LLM review:",
             _json_block(context.get("llm_review")),
+            "",
+            "CLI regression check:",
+            _json_block(context.get("cli_regression_check")),
+            "",
+            "CLI regression summary:",
+            _cli_regression_summary(context.get("cli_regression_check")),
             "",
             "Operation error:",
             _json_block(context.get("operation_error")),
@@ -220,6 +229,7 @@ def _detect_repair_reason(
     working_tree_test_results: Any,
     semantic_review: Any,
     llm_review: Any,
+    cli_regression_check: Any,
 ) -> str | None:
     source_map = {
         "sandbox": "sandbox_failed",
@@ -234,6 +244,9 @@ def _detect_repair_reason(
 
     if _test_status(working_tree_test_results) in {"failed", "timed_out"}:
         return "working_tree_failed"
+
+    if isinstance(cli_regression_check, dict) and cli_regression_check.get("status") == "failed":
+        return "cli_regression_failed"
 
     if _has_concerns(semantic_review):
         return "semantic_review_concerns"
@@ -402,6 +415,30 @@ def _warnings(*values: Any) -> list[str]:
     return _dedupe_strings(warnings)
 
 
+def _cli_regression_summary(cli_regression_check: Any) -> str:
+    if not isinstance(cli_regression_check, dict) or cli_regression_check.get("status") != "failed":
+        return "(none)"
+
+    lines = ["CLI regression detected:"]
+    checks = cli_regression_check.get("checks")
+    if isinstance(checks, list):
+        for check in checks:
+            if not isinstance(check, dict):
+                continue
+            path = check.get("path", "unknown")
+            removed = _dedupe_strings(
+                [
+                    *_string_list(check.get("removed_subcommands")),
+                    *_string_list(check.get("removed_dispatch_commands")),
+                ]
+            )
+            for command in removed:
+                lines.append(f"- Existing command {command} was removed in {path}.")
+
+    lines.append("Repair must preserve all existing CLI commands and add the new command without replacing them.")
+    return "\n".join(lines)
+
+
 def _evidence_used(
     session_path: Path,
     *,
@@ -416,6 +453,7 @@ def _evidence_used(
         "file_changes.json",
         "diff.patch",
         "semantic_review.json",
+        "cli_regression_check.json",
         "plan_constraints_check.json",
         "diff_warnings.json",
     ]

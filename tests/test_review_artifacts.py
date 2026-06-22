@@ -225,6 +225,31 @@ class ReviewArtifactsTests(unittest.TestCase):
             review["concerns"],
         )
 
+    def test_semantic_review_concerns_for_cli_regression(self) -> None:
+        file_changes = FileChangesOutput(
+            changes=[
+                FileChange(
+                    path="main.py",
+                    change_type="modified",
+                    content="",
+                    mode="full_file_rewrite",
+                )
+            ]
+        )
+
+        review = build_semantic_review_json(
+            request="Add sqrt",
+            file_changes=file_changes,
+            warnings=[],
+            plan={"acceptance_criteria": ["Preserve existing commands"]},
+            cli_regression_check={
+                "status": "failed",
+                "warnings": ["Existing CLI command 'divide' appears to have been removed."],
+            },
+        )
+
+        self.assertIn("Existing CLI command 'divide' appears to have been removed.", review["concerns"])
+
     def test_render_deterministic_review_text_contains_sections(self) -> None:
         text = render_deterministic_review_text(
             {

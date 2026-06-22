@@ -408,6 +408,7 @@ def _existing_artifacts(session_dir: Path) -> list[str]:
         "verification_coverage.json",
         "diff.patch",
         "diff_warnings.json",
+        "cli_regression_check.json",
         "plan_constraints_check.json",
         "diff_validation.json",
         "diff_check.json",

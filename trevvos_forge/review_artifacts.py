@@ -65,6 +65,7 @@ def build_semantic_review_json(
     plan: dict[str, Any] | None = None,
     plan_constraints_check: dict[str, Any] | None = None,
     verification_coverage: dict[str, Any] | None = None,
+    cli_regression_check: dict[str, Any] | None = None,
     sandbox_test_results: dict[str, Any] | None = None,
     working_tree_test_results: dict[str, Any] | None = None,
 ) -> dict:
@@ -86,6 +87,7 @@ def build_semantic_review_json(
         plan=plan,
         plan_constraints_check=plan_constraints_check,
         verification_coverage=verification_coverage,
+        cli_regression_check=cli_regression_check,
         sandbox_test_results=sandbox_test_results,
         working_tree_test_results=working_tree_test_results,
     )
@@ -103,6 +105,7 @@ def build_semantic_review_json_from_context(context: dict[str, Any]) -> dict:
 
     plan_constraints_check = context.get("plan_constraints_check")
     verification_coverage = context.get("verification_coverage")
+    cli_regression_check = context.get("cli_regression_check")
     plan_constraints_status = validations.get("plan_constraints", "not_run")
     if isinstance(plan_constraints_check, dict):
         plan_constraints_status = plan_constraints_check.get("status", plan_constraints_status)
@@ -133,6 +136,7 @@ def build_semantic_review_json_from_context(context: dict[str, Any]) -> dict:
         plan=context.get("plan") if isinstance(context.get("plan"), dict) else None,
         plan_constraints_check=plan_constraints_check if isinstance(plan_constraints_check, dict) else None,
         verification_coverage=verification_coverage if isinstance(verification_coverage, dict) else None,
+        cli_regression_check=cli_regression_check if isinstance(cli_regression_check, dict) else None,
         sandbox_test_results=(
             context.get("sandbox_test_results")
             if isinstance(context.get("sandbox_test_results"), dict)
@@ -185,6 +189,7 @@ def _semantic_review_payload(
     plan: dict[str, Any] | None,
     plan_constraints_check: dict[str, Any] | None,
     verification_coverage: dict[str, Any] | None,
+    cli_regression_check: dict[str, Any] | None,
     sandbox_test_results: dict[str, Any] | None,
     working_tree_test_results: dict[str, Any] | None,
 ) -> dict:
@@ -209,6 +214,7 @@ def _semantic_review_payload(
         test_evidence=test_evidence,
         plan_constraints=plan_constraints,
         verification_coverage=verification_coverage,
+        cli_regression_check=cli_regression_check,
     )
     merged_warnings = _dedupe_strings([*warnings, *generated_warnings])
 
@@ -228,6 +234,7 @@ def _semantic_review_payload(
         "test_evidence": test_evidence,
         "plan_constraints": plan_constraints,
         "verification_coverage": verification_coverage or {"status": "not_run"},
+        "cli_regression_check": cli_regression_check or {"status": "not_applicable"},
         "concerns": concerns,
         "warnings": merged_warnings,
         "notes": [
@@ -299,6 +306,7 @@ def _review_findings(
     test_evidence: dict[str, str],
     plan_constraints: dict[str, str],
     verification_coverage: dict[str, Any] | None,
+    cli_regression_check: dict[str, Any] | None,
 ) -> tuple[list[str], list[str]]:
     concerns: list[str] = []
     warnings: list[str] = []
@@ -330,6 +338,13 @@ def _review_findings(
                 )
         else:
             concerns.append("Plan verification coverage failed.")
+
+    if isinstance(cli_regression_check, dict) and cli_regression_check.get("status") == "failed":
+        check_warnings = _string_list(cli_regression_check.get("warnings"))
+        if check_warnings:
+            concerns.extend(check_warnings)
+        else:
+            concerns.append("CLI regression check failed.")
 
     if not _string_list_from_dict(plan, "acceptance_criteria"):
         warnings.append("No acceptance criteria were available in the plan.")

@@ -13,6 +13,12 @@ class PlanOutput:
     steps: list[str]
     risks: list[str]
     next_command: str
+    expected_behavior: list[str]
+    acceptance_criteria: list[str]
+    suggested_verification_commands: list[str]
+    files_to_create: list[str]
+    files_to_modify: list[str]
+    files_not_to_modify: list[str]
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PlanOutput":
@@ -23,6 +29,12 @@ class PlanOutput:
             steps=_required_str_list(data, "steps"),
             risks=_required_str_list(data, "risks"),
             next_command=_required_str(data, "next_command"),
+            expected_behavior=_optional_str_list(data, "expected_behavior"),
+            acceptance_criteria=_optional_str_list(data, "acceptance_criteria"),
+            suggested_verification_commands=_optional_str_list(data, "suggested_verification_commands"),
+            files_to_create=_optional_str_list(data, "files_to_create"),
+            files_to_modify=_optional_str_list(data, "files_to_modify"),
+            files_not_to_modify=_optional_str_list(data, "files_not_to_modify"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -30,6 +42,12 @@ class PlanOutput:
 
     def to_markdown(self) -> str:
         files = "\n".join(f"- {file}" for file in self.files_involved) or "- none"
+        expected_behavior = _markdown_bullets(self.expected_behavior)
+        acceptance_criteria = _markdown_bullets(self.acceptance_criteria)
+        verification_commands = _markdown_command_block(self.suggested_verification_commands)
+        files_to_create = _markdown_bullets(self.files_to_create)
+        files_to_modify = _markdown_bullets(self.files_to_modify)
+        files_not_to_modify = _markdown_bullets(self.files_not_to_modify)
         steps = "\n".join(f"{index}. {step}" for index, step in enumerate(self.steps, start=1)) or "1. none"
         risks = "\n".join(f"- {risk}" for risk in self.risks) or "- none"
 
@@ -45,6 +63,30 @@ class PlanOutput:
 ## Files involved
 
 {files}
+
+## Expected behavior
+
+{expected_behavior}
+
+## Acceptance criteria
+
+{acceptance_criteria}
+
+## Suggested commands to verify
+
+{verification_commands}
+
+## Files to create
+
+{files_to_create}
+
+## Files to modify
+
+{files_to_modify}
+
+## Files not to modify
+
+{files_not_to_modify}
 
 ## Steps
 
@@ -125,3 +167,36 @@ def _required_str_list(data: dict[str, Any], key: str) -> list[str]:
         items.append(item.strip())
 
     return items
+
+
+def _optional_str_list(data: dict[str, Any], key: str) -> list[str]:
+    value = data.get(key)
+
+    if value is None:
+        return []
+
+    if not isinstance(value, list):
+        raise StructuredOutputError(f"Invalid list field: {key}")
+
+    items: list[str] = []
+
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            raise StructuredOutputError(
+                f"Invalid item at {key}[{index}]; expected a non-empty string."
+            )
+
+        items.append(item.strip())
+
+    return items
+
+
+def _markdown_bullets(items: list[str]) -> str:
+    return "\n".join(f"- {item}" for item in items) or "- none"
+
+
+def _markdown_command_block(commands: list[str]) -> str:
+    if not commands:
+        return "- none"
+
+    return "```bash\n" + "\n".join(commands) + "\n```"

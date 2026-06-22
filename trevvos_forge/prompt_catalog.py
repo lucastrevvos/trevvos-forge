@@ -106,6 +106,18 @@ Não gere código completo agora.
 Não invente arquivos se a estrutura não indicar necessidade.
 Se faltar informação, diga isso nos riscos.
 
+Behavior-first planning rules:
+- Include Expected behavior with observable examples.
+- Include Acceptance criteria with verifiable outcomes.
+- Include Suggested commands to verify with executable commands when possible.
+- Separate Files to create, Files to modify, and Files not to modify.
+- If the user asks for a CLI, treat CLI as an executable command interface, not only a function listing, unless the user explicitly asks only to list functions.
+- For a simple Python CLI, prefer argparse, a main() function, if __name__ == "__main__": main(), subcommands registered before parse_args(), and dispatch inside main().
+- For Python CLI plans, include examples like python main.py add 2 3 -> 5.
+- If the user asks for tests in a simple Python project, use unittest by default, create files under tests/ when appropriate, and do not embed tests in the runtime file unless explicitly requested.
+- For Python tests, suggest python -m unittest discover -s tests.
+- If the request is broad, such as CRUD, full API, persistence, tests, and docs at once, warn that it is broad and propose incremental milestones without blocking.
+
 O JSON deve seguir exatamente este formato:
 
 {{
@@ -113,6 +125,24 @@ O JSON deve seguir exatamente este formato:
   "project_reading": "Leitura técnica curta do projeto com base no contexto.",
   "files_involved": [
     "arquivo/ou/pasta/provavel.py"
+  ],
+  "expected_behavior": [
+    "Observable expected behavior, for example: python main.py add 2 3 prints 5."
+  ],
+  "acceptance_criteria": [
+    "Verifiable acceptance criterion."
+  ],
+  "suggested_verification_commands": [
+    "python -m py_compile main.py"
+  ],
+  "files_to_create": [
+    "new_file.py"
+  ],
+  "files_to_modify": [
+    "existing_file.py"
+  ],
+  "files_not_to_modify": [
+    "file_that_should_remain_unchanged.py"
   ],
   "steps": [
     "Passo técnico 1",
@@ -123,6 +153,11 @@ O JSON deve seguir exatamente este formato:
   ],
   "next_command": "trevvos diff"
 }}
+
+Example for Python CLI:
+- Expected behavior: python main.py add 2 3 prints 5; python main.py divide 10 0 prints a friendly error.
+- Acceptance criteria: The CLI uses argparse; subcommands are registered before parse_args(); runtime dispatch happens inside main().
+- Suggested commands to verify: python -m py_compile main.py calculator.py; python main.py add 2 3; python main.py divide 10 2; python main.py divide 10 0.
 
 Contexto do projeto:
 {workspace_context}

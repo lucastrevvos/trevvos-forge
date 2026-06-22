@@ -12,20 +12,31 @@ SMALL_FILE_LINE_LIMIT = 120
 
 def build_retry_context(session: ForgeSession, repo_root: Path) -> dict:
     operation_error = _read_json_file(session.path / "operation_error.json")
+    file_changes_error = _read_json_file(session.path / "file_changes_error.json")
 
-    if operation_error is None:
-        raise DiffError("No operation_error.json found for current session.")
+    if operation_error is None and file_changes_error is None:
+        raise DiffError(
+            "No retryable diff error found for current session. Expected operation_error.json or file_changes_error.json."
+        )
 
-    error_path = operation_error.get("path")
+    previous_error = operation_error if isinstance(operation_error, dict) else file_changes_error
+    if not isinstance(previous_error, dict):
+        previous_error = {}
+
+    error_path = previous_error.get("path")
     current_file = _current_file_context(repo_root=repo_root, error_path=error_path)
 
     return {
+        "retry_error_source": "operation_error" if isinstance(operation_error, dict) else "file_changes_error",
         "user_request": _read_optional_session_text(session, "user_request.txt"),
         "plan_markdown": _read_optional_session_text(session, "plan.md"),
         "plan_json": _read_json_file(session.path / "plan.json"),
         "selected_files": _read_json_file(session.path / "selected_files.json"),
         "workspace_context": _read_optional_session_text(session, "context.md"),
         "operation_error": operation_error,
+        "file_changes_error": file_changes_error,
+        "previous_error": previous_error,
+        "raw_file_changes_response": _read_optional_session_text(session, "file_changes_raw_response.json"),
         "current_file": current_file,
     }
 
@@ -39,11 +50,15 @@ def build_retry_prompt(context: dict) -> str:
 
 
 def render_retry_context(context: dict) -> str:
-    operation_error = context.get("operation_error")
+    previous_error = context.get("previous_error")
+    file_changes_error = context.get("file_changes_error")
     current_file = context.get("current_file")
 
-    if not isinstance(operation_error, dict):
-        operation_error = {}
+    if not isinstance(previous_error, dict):
+        previous_error = {}
+
+    if not isinstance(file_changes_error, dict):
+        file_changes_error = {}
 
     if not isinstance(current_file, dict):
         current_file = {}
@@ -61,14 +76,20 @@ def render_retry_context(context: dict) -> str:
         "Selected files:",
         _json_block(context.get("selected_files")),
         "",
-        "Previous operation error:",
-        _json_block(operation_error),
+        "Retry error source:",
+        str(context.get("retry_error_source") or "unknown"),
         "",
-        f"Error type: {operation_error.get('error_type') or 'unknown'}",
-        f"Path: {operation_error.get('path') or 'unknown'}",
-        f"Operation: {operation_error.get('operation') or 'unknown'}",
-        f"Target: {operation_error.get('target') or 'unknown'}",
-        f"Suggested resolution: {operation_error.get('suggested_resolution') or 'unknown'}",
+        "Previous error:",
+        _json_block(previous_error),
+        "",
+        f"Error type: {previous_error.get('error_type') or 'unknown'}",
+        f"Path: {previous_error.get('path') or 'unknown'}",
+        f"Operation: {previous_error.get('operation') or 'unknown'}",
+        f"Target: {previous_error.get('target') or 'unknown'}",
+        f"Suggested resolution: {previous_error.get('suggested_resolution') or 'unknown'}",
+        "",
+        "Previous raw file_changes response:",
+        str(context.get("raw_file_changes_response") or "(unavailable)"),
         "",
         f"Current file: {current_file.get('path') or 'unavailable'}",
         f"Total lines: {current_file.get('total_lines') if current_file.get('total_lines') is not None else 'unknown'}",
@@ -99,6 +120,7 @@ def build_retry_metadata(
     return {
         "retry": True,
         "retry_count": retry_count,
+        "previous_error_source": _previous_error_source(operation_error),
         "previous_error_type": operation_error.get("error_type"),
         "previous_operation": operation_error.get("operation"),
         "previous_target": operation_error.get("target"),
@@ -198,6 +220,13 @@ def _read_optional_session_text(session: ForgeSession, file_name: str) -> str:
         return read_session_text(session, file_name)
     except SessionError:
         return ""
+
+
+def _previous_error_source(error: dict[str, Any]) -> str:
+    if "raw_response_path" in error:
+        return "file_changes_error"
+
+    return "operation_error"
 
 
 def _read_json_file(path: Path) -> Any:

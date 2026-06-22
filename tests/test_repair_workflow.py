@@ -31,6 +31,91 @@ class RepairWorkflowTests(unittest.TestCase):
             result = runner.invoke(app, ["repair", "--path", str(root)])
 
             self.assertEqual(result.exit_code, 1)
+            self.assertIn("No valid diff found to repair.", result.output)
+            self.assertIn("trevvos diff --retry", result.output)
+            self.assertTrue((session.path / "repair_metadata.json").exists())
+            self.assertFalse((session.path / "repair_prompt.md").exists())
+            self.assertFalse((session.path / "operation_error.json").exists())
+
+            metadata = json.loads((session.path / "repair_metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["status"], "not_repairable")
+            self.assertEqual(metadata["reason"], "missing_valid_diff")
+            self.assertEqual(metadata["suggested_next_command"], "trevvos diff --retry")
+
+    def test_repair_does_not_call_provider_without_valid_diff(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            session = create_session(root, "Update CLI", command="plan")
+            write_session_json(session, "plan.json", {})
+            write_session_text(session, "plan.md", "Plan.")
+            write_session_json(
+                session,
+                "semantic_review.json",
+                {
+                    "warnings": [
+                        "Suggested verification commands exist, but sandbox tests were not run.",
+                        "Plan verification commands were not fully executed.",
+                    ]
+                },
+            )
+
+            with patch("trevvos_forge.cli.build_provider") as build_provider:
+                result = runner.invoke(app, ["repair", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn("No valid diff found to repair.", result.output)
+            build_provider.assert_not_called()
+            self.assertTrue((session.path / "repair_metadata.json").exists())
+            self.assertFalse((session.path / "repair_prompt.md").exists())
+
+            metadata = json.loads((session.path / "repair_metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["status"], "not_repairable")
+
+    def test_repair_does_not_treat_sandbox_not_run_as_repairable_without_diff(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            session = create_session(root, "Update CLI", command="plan")
+            write_session_json(session, "plan.json", {})
+            write_session_text(session, "plan.md", "Plan.")
+            write_session_json(
+                session,
+                "semantic_review.json",
+                {
+                    "verdict": "needs_human_review",
+                    "warnings": ["Suggested verification commands exist, but sandbox tests were not run."],
+                    "plan_review": {"plan_commands_executed": "no"},
+                },
+            )
+
+            result = runner.invoke(app, ["repair", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 1)
+            metadata = json.loads((session.path / "repair_metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["status"], "not_repairable")
+            self.assertEqual(metadata["reason"], "missing_valid_diff")
+
+    def test_repair_fails_with_valid_diff_but_no_repairable_evidence(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            session = create_session(root, "Update CLI", command="plan")
+            write_session_json(session, "plan.json", {})
+            write_session_text(session, "plan.md", "Plan.")
+            write_session_json(
+                session,
+                "file_changes.json",
+                {"changes": [{"path": "main.py", "change_type": "modified", "mode": "full_file_rewrite"}]},
+            )
+            write_session_text(session, "diff.patch", "diff --git a/main.py b/main.py\n")
+
+            result = runner.invoke(app, ["repair", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 1)
             self.assertIn("No repairable failure found for current session.", result.output)
 
     def test_build_repair_context_with_sandbox_failure(self) -> None:

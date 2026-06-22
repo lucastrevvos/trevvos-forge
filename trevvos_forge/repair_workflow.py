@@ -3,7 +3,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from trevvos_forge.exceptions import DiffError, SessionError
+from trevvos_forge.exceptions import DiffError, RepairNotRepairableError, SessionError
 from trevvos_forge.prompt_catalog import get_prompt
 from trevvos_forge.sessions import ForgeSession, read_session_text, write_session_json
 
@@ -11,11 +11,16 @@ from trevvos_forge.sessions import ForgeSession, read_session_text, write_sessio
 SMALL_FILE_LINE_LIMIT = 120
 PATCH_PREVIEW_LINE_LIMIT = 220
 LOG_TAIL_LINE_LIMIT = 120
+NO_VALID_DIFF_REPAIR_MESSAGE = (
+    "No valid diff found to repair.\n"
+    "If diff generation failed, run `trevvos diff --retry` instead."
+)
 
 
 def build_repair_context(session: ForgeSession, repo_root: Path, source: str | None = None) -> dict:
     plan_json = _read_json_file(session.path / "plan.json")
     file_changes = _read_json_file(session.path / "file_changes.json")
+    _validate_repairable_diff(session.path, file_changes)
     semantic_review = _read_json_file(session.path / "semantic_review.json")
     llm_review = _read_json_file(session.path / "llm_review.json")
     sandbox_test_results = _read_json_file(session.path / "sandbox_test_results.json")
@@ -174,6 +179,29 @@ def build_repair_metadata(
 
 def write_repair_metadata(session: ForgeSession, metadata: dict) -> None:
     write_session_json(session, "repair_metadata.json", metadata)
+
+
+def build_not_repairable_metadata(session: ForgeSession) -> dict:
+    return {
+        "repair": True,
+        "repair_count": _next_repair_count(session.path),
+        "status": "not_repairable",
+        "reason": "missing_valid_diff",
+        "suggested_next_command": "trevvos diff --retry",
+    }
+
+
+def _validate_repairable_diff(session_path: Path, file_changes: Any) -> None:
+    patch_path = session_path / "diff.patch"
+
+    if not patch_path.exists() or not patch_path.read_text(encoding="utf-8").strip():
+        raise RepairNotRepairableError(NO_VALID_DIFF_REPAIR_MESSAGE)
+
+    if not isinstance(file_changes, dict) or not isinstance(file_changes.get("changes"), list):
+        raise RepairNotRepairableError(NO_VALID_DIFF_REPAIR_MESSAGE)
+
+    if not file_changes["changes"]:
+        raise RepairNotRepairableError(NO_VALID_DIFF_REPAIR_MESSAGE)
 
 
 def _detect_repair_reason(

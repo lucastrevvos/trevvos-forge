@@ -109,6 +109,16 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn('"changes"', prompt)
         self.assertIn("retry context", prompt)
 
+    def test_file_changes_retry_prompt_contains_schema_error_rules(self) -> None:
+        prompt = get_prompt("file_changes_retry").render(
+            retry_context="retry context",
+        )
+
+        self.assertIn("invalid_file_changes_schema", prompt)
+        self.assertIn("top-level `changes`", prompt)
+        self.assertIn("Do not omit `changes`", prompt)
+        self.assertIn("Return valid JSON", prompt)
+
     def test_repair_file_changes_prompt_contains_repair_evidence_rules(self) -> None:
         prompt = get_prompt("repair_file_changes").render(
             repair_context="repair context",

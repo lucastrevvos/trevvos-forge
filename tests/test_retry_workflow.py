@@ -24,8 +24,35 @@ class RetryWorkflowTests(unittest.TestCase):
             result = runner.invoke(app, ["diff", "--retry", "--path", str(root)])
 
             self.assertEqual(result.exit_code, 1)
-            self.assertIn("No operation_error.json found for current session.", result.output)
+            self.assertIn("No retryable diff error found for current session.", result.output)
             self.assertFalse((session.path / "operation_error.json").exists())
+            self.assertFalse((session.path / "file_changes_error.json").exists())
+
+    def test_diff_writes_file_changes_error_artifacts_for_missing_changes(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            session = create_session(root, "Update CLI", command="plan")
+            write_session_text(session, "context.md", "context")
+            write_session_text(session, "plan.md", "plan")
+            provider = _FakeProvider('{"foo": []}')
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(app, ["diff", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn("Missing or invalid list field: changes", result.output)
+            self.assertIn("file_changes_error.json", result.output)
+            self.assertIn("file_changes_error.md", result.output)
+            self.assertTrue((session.path / "file_changes_error.json").exists())
+            self.assertTrue((session.path / "file_changes_error.md").exists())
+            self.assertFalse((session.path / "diff.patch").exists())
+
+            error_payload = json.loads((session.path / "file_changes_error.json").read_text(encoding="utf-8"))
+            self.assertEqual(error_payload["status"], "failed")
+            self.assertEqual(error_payload["error_type"], "invalid_file_changes_schema")
+            self.assertEqual(error_payload["raw_response_path"], "file_changes_raw_response.json")
 
     def test_build_retry_prompt_includes_previous_error_and_numbered_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -100,6 +127,73 @@ class RetryWorkflowTests(unittest.TestCase):
             self.assertEqual(metadata["previous_error_type"], "target_not_found")
             self.assertEqual(metadata["previous_operation"], "insert_after_line")
             self.assertEqual(metadata["prompt"], "file_changes_retry@1.0.0")
+
+    def test_retry_with_file_changes_error_succeeds_and_clears_schema_error(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "main.py").write_text("print('hello')\n", encoding="utf-8")
+            session = create_session(root, "Update CLI", command="plan")
+            write_session_text(session, "context.md", "## File: main.py\nprint('hello')\n")
+            write_session_text(session, "plan.md", "Plan.")
+            write_session_json(
+                session,
+                "selected_files.json",
+                {
+                    "selected_files": [
+                        {
+                            "path": "main.py",
+                            "total_lines": 1,
+                            "included_ranges": [{"start_line": 1, "end_line": 1}],
+                        }
+                    ]
+                },
+            )
+            write_session_text(session, "file_changes_raw_response.json", '{"foo": []}')
+            write_session_json(
+                session,
+                "file_changes_error.json",
+                {
+                    "status": "failed",
+                    "error_type": "invalid_file_changes_schema",
+                    "message": "Missing or invalid list field: changes",
+                    "raw_response_path": "file_changes_raw_response.json",
+                    "suggested_resolution": "Run trevvos diff --retry.",
+                },
+            )
+            write_session_text(session, "file_changes_error.md", "# File Changes Error\n")
+
+            provider = _FakeProvider(
+                """
+{
+  "changes": [
+    {
+      "path": "main.py",
+      "change_type": "modified",
+      "mode": "full_file_rewrite",
+      "content": "print('fixed')\\n"
+    }
+  ]
+}
+"""
+            )
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(app, ["diff", "--retry", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("invalid_file_changes_schema", provider.prompt)
+            self.assertIn('{"foo": []}', provider.prompt)
+            self.assertIn("Retry generated a new diff successfully", result.output)
+            self.assertTrue((session.path / "diff.patch").exists())
+            self.assertFalse((session.path / "file_changes_error.json").exists())
+            self.assertFalse((session.path / "file_changes_error.md").exists())
+
+            metadata = json.loads((session.path / "retry_metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["status"], "succeeded")
+            self.assertEqual(metadata["previous_error_source"], "file_changes_error")
+            self.assertEqual(metadata["previous_error_type"], "invalid_file_changes_schema")
 
     def test_retry_failure_writes_new_operation_error_and_failed_metadata(self) -> None:
         runner = CliRunner()
@@ -229,8 +323,10 @@ def _create_retry_session(root: Path):
 class _FakeProvider:
     def __init__(self, response: str) -> None:
         self.response = response
+        self.prompt = ""
 
     def generate(self, prompt: str) -> str:
+        self.prompt = prompt
         return self.response
 
 

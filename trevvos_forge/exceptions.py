@@ -50,6 +50,10 @@ class DiffError(ForgeError):
     """Raised when diff generation or parsing fails."""
 
 
+class RepairNotRepairableError(DiffError):
+    """Raised when repair is requested for a session without repairable diff evidence."""
+
+
 class DiffValidationError(DiffError):
     """Raised when a generated diff fails safety validation."""
 

@@ -390,11 +390,11 @@ Pedido original:
     "file_changes_retry": PromptTemplate(
         name="file_changes_retry",
         version="1.0.0",
-        description="Regenerates structured file changes after a deterministic operation error.",
+        description="Regenerates structured file changes after a deterministic operation or schema error.",
         template="""
 Voce e a Trevvos Forge, uma assistente local de engenharia de software.
 
-Voce esta corrigindo uma tentativa anterior de gerar file_changes que falhou por erro deterministico de operacao.
+Voce esta corrigindo uma tentativa anterior de gerar file_changes que falhou por erro deterministico de operacao ou por schema invalido.
 
 Responda SOMENTE com um JSON valido.
 Nao use Markdown.
@@ -405,6 +405,11 @@ Nao diga que alterou arquivos.
 Nao aplique as mudancas.
 
 Regras de retry:
+- If previous error was invalid_file_changes_schema, return valid JSON with top-level `changes`.
+- If previous error was invalid_file_changes_schema, the previous response did not follow the expected schema and may have omitted `changes`.
+- Do not omit `changes`.
+- Do not invent an alternate response format.
+- Return valid JSON using the same schema as file_changes_generation.
 - Do not repeat invalid target.
 - Nao repita a mesma operacao invalida.
 - Se o erro anterior foi target_not_found, nao use o mesmo target inexistente.

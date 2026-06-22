@@ -171,6 +171,50 @@ class RepairWorkflowTests(unittest.TestCase):
             self.assertIn("Preserve files listed in files_not_to_modify", prompt)
             self.assertIn('"changes"', prompt)
 
+    def test_repair_prompt_includes_current_workspace_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "calculator.py").write_text(
+                "def divide(a, b):\n"
+                "    if b == 0:\n"
+                "        raise ValueError('Cannot divide by zero')\n"
+                "    return a / b\n",
+                encoding="utf-8",
+            )
+            session = create_session(root, "Add sqrt", command="plan")
+            write_session_json(
+                session,
+                "plan.json",
+                {
+                    "files_to_modify": ["calculator.py"],
+                    "acceptance_criteria": ["sqrt works"],
+                    "suggested_verification_commands": ["python -m unittest"],
+                },
+            )
+            write_session_text(session, "plan.md", "Plan.")
+            write_session_json(
+                session,
+                "file_changes.json",
+                {"changes": [{"path": "calculator.py", "change_type": "modified", "mode": "full_file_rewrite"}]},
+            )
+            write_session_text(
+                session,
+                "diff.patch",
+                "diff --git a/calculator.py b/calculator.py\n"
+                "+import math\n"
+                "+def sqrt(a):\n"
+                "+    return math.sqrt(a)\n",
+            )
+            write_session_json(session, "sandbox_test_results.json", {"mode": "sandbox", "status": "failed"})
+            write_session_text(session, "sandbox_test_output.log", "calculator.py failed\n")
+
+            prompt = build_repair_prompt(build_repair_context(session=session, repo_root=root))
+
+            self.assertIn("Current workspace content for calculator.py:", prompt)
+            self.assertIn("1 | def divide(a, b):", prompt)
+            self.assertIn("targets must exist in the current workspace content", prompt)
+            self.assertIn("not against the previously proposed patch", prompt)
+
     def test_repair_with_fake_provider_generates_valid_diff_without_applying(self) -> None:
         runner = CliRunner()
 

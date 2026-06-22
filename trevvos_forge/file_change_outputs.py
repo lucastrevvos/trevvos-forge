@@ -5,6 +5,17 @@ from typing import Any
 from trevvos_forge.exceptions import FileChangeOutputError
 
 
+ALLOWED_OPERATION_BASED_EDIT_OPERATIONS = {
+    "insert_after_heading",
+    "insert_after_line",
+    "insert_before_line",
+    "replace_exact_text",
+    "replace_block",
+    "append_to_file",
+    "create_file",
+}
+
+
 @dataclass(frozen=True)
 class FileChange:
     path: str
@@ -88,6 +99,21 @@ def _parse_file_change(data: dict[str, Any], index: int) -> FileChange:
         raise FileChangeOutputError(
             f"Invalid field changes[{index}].change_type; expected 'modified' or 'created'."
         )
+
+    if operation == "full_file_rewrite":
+        if not isinstance(content, str):
+            raise FileChangeOutputError(
+                "full_file_rewrite must be used as mode with content, not as an operation."
+            )
+        if any(isinstance(data.get(field), str) and data.get(field).strip() for field in ["target", "insert", "replacement"]):
+            raise FileChangeOutputError(
+                "full_file_rewrite must be used as mode with content, not as an operation."
+            )
+        mode = "full_file_rewrite"
+        operation = None
+        target = None
+        insert = None
+        replacement = None
 
     if mode not in {"full_file_rewrite", "operation_based_edit"}:
         raise FileChangeOutputError(
@@ -201,8 +227,9 @@ def _validate_operation_fields(
             )
         return
 
+    allowed = ", ".join(sorted(ALLOWED_OPERATION_BASED_EDIT_OPERATIONS))
     raise FileChangeOutputError(
-        f"Unknown operation at changes[{index}].operation: {operation}"
+        f"Unknown operation at changes[{index}].operation: {operation}. Allowed operation_based_edit operations: {allowed}."
     )
 
 

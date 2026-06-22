@@ -9,6 +9,7 @@ from trevvos_forge.status_workflow import (
     write_session_status,
 )
 from trevvos_forge.sessions import write_patch_file
+from trevvos_forge.timeline import append_timeline_event
 
 
 class StatusWorkflowTests(unittest.TestCase):
@@ -22,7 +23,7 @@ class StatusWorkflowTests(unittest.TestCase):
 
             self.assertEqual(status["checks"]["diff"], "missing")
             self.assertEqual(status["overall_status"], "planning")
-            self.assertEqual(status["next_recommended_command"], "trevvos diff")
+            self.assertEqual(status["next_recommended_command"], 'trevvos plan "..."')
 
     def test_diff_validated_without_sandbox(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -57,7 +58,7 @@ class StatusWorkflowTests(unittest.TestCase):
             status = build_session_status(session_dir)
 
             self.assertEqual(status["overall_status"], "sandbox_test_failed")
-            self.assertEqual(status["next_recommended_command"], "Review test_output.log")
+            self.assertEqual(status["next_recommended_command"], "trevvos repair")
 
     def test_working_tree_test_passed_and_commit_absent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -183,6 +184,35 @@ class StatusWorkflowTests(unittest.TestCase):
             self.assertTrue((session_dir / "session_status.json").exists())
             json.dumps(status)
 
+    def test_verbose_status_includes_timeline_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            session_dir = Path(temporary_directory)
+            _write_validated_diff(session_dir)
+            append_timeline_event(
+                session_dir,
+                {
+                    "event": "diff_failed",
+                    "command": "trevvos diff",
+                    "status": "failed",
+                    "reason": "invalid_file_changes_schema",
+                },
+            )
+            append_timeline_event(
+                session_dir,
+                {
+                    "event": "diff_retry_completed",
+                    "command": "trevvos diff --retry",
+                    "status": "succeeded",
+                },
+            )
+
+            status = build_session_status(session_dir)
+            rendered = render_status_text(status, verbose=True)
+
+            self.assertIn("Timeline:", rendered)
+            self.assertIn("diff_failed: invalid_file_changes_schema", rendered)
+            self.assertIn("diff_retry_completed", rendered)
+
 
 def _write_metadata(session_dir: Path, status: str = "planned") -> None:
     (session_dir / "metadata.json").write_text(
@@ -202,6 +232,7 @@ def _write_metadata(session_dir: Path, status: str = "planned") -> None:
 def _write_validated_diff(session_dir: Path, metadata_status: str = "diff_validated") -> None:
     _write_metadata(session_dir, status=metadata_status)
     (session_dir / "plan.md").write_text("Plan.", encoding="utf-8")
+    (session_dir / "plan.json").write_text(json.dumps({"summary": "Plan."}), encoding="utf-8")
     write_patch_file(session_dir / "diff.patch", "diff --git a/README.md b/README.md\n")
     (session_dir / "change_summary.md").write_text("# Change Summary\n", encoding="utf-8")
     (session_dir / "diff_validation.json").write_text(

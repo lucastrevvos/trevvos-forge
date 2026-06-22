@@ -195,6 +195,65 @@ class RetryWorkflowTests(unittest.TestCase):
             self.assertEqual(metadata["previous_error_source"], "file_changes_error")
             self.assertEqual(metadata["previous_error_type"], "invalid_file_changes_schema")
 
+    def test_retry_with_unknown_operation_full_file_rewrite_error_succeeds(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "main.py").write_text("print('old')\n", encoding="utf-8")
+            session = create_session(root, "Update CLI", command="plan")
+            write_session_text(session, "context.md", "## File: main.py\nprint('old')\n")
+            write_session_text(session, "plan.md", "Plan.")
+            write_session_text(
+                session,
+                "file_changes_raw_response.json",
+                '{"changes":[{"path":"main.py","change_type":"modified","mode":"operation_based_edit","operation":"full_file_rewrite"}]}',
+            )
+            write_session_json(
+                session,
+                "selected_files.json",
+                {"selected_files": [{"path": "main.py", "total_lines": 1}]},
+            )
+            write_session_json(
+                session,
+                "file_changes_error.json",
+                {
+                    "status": "failed",
+                    "error_type": "unknown_operation",
+                    "message": "Unknown operation at changes[0].operation: full_file_rewrite.",
+                    "operation": "full_file_rewrite",
+                    "raw_response_path": "file_changes_raw_response.json",
+                    "suggested_resolution": "Use mode: full_file_rewrite with content.",
+                },
+            )
+
+            provider = _FakeProvider(
+                """
+{
+  "changes": [
+    {
+      "path": "main.py",
+      "change_type": "modified",
+      "mode": "full_file_rewrite",
+      "content": "print('new')\\n"
+    }
+  ]
+}
+"""
+            )
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(app, ["diff", "--retry", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("unknown_operation", provider.prompt)
+            self.assertIn("full_file_rewrite", provider.prompt)
+            self.assertTrue((session.path / "diff.patch").exists())
+
+            metadata = json.loads((session.path / "retry_metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["status"], "succeeded")
+            self.assertEqual(metadata["previous_error_type"], "unknown_operation")
+
     def test_retry_failure_writes_new_operation_error_and_failed_metadata(self) -> None:
         runner = CliRunner()
 

@@ -23,6 +23,7 @@ def build_repair_context(session: ForgeSession, repo_root: Path, source: str | N
     _validate_repairable_diff(session.path, file_changes)
     semantic_review = _read_json_file(session.path / "semantic_review.json")
     llm_review = _read_json_file(session.path / "llm_review.json")
+    operation_error = _read_json_file(session.path / "operation_error.json")
     sandbox_test_results = _read_json_file(session.path / "sandbox_test_results.json")
     working_tree_test_results = _read_json_file(session.path / "working_tree_test_results.json")
     legacy_test_results = _read_json_file(session.path / "test_results.json")
@@ -61,6 +62,7 @@ def build_repair_context(session: ForgeSession, repo_root: Path, source: str | N
         repo_root=repo_root,
         file_changes=file_changes,
         plan_json=plan_json,
+        operation_error=operation_error,
         logs=[sandbox_log or "", working_tree_log or ""],
     )
 
@@ -84,6 +86,7 @@ def build_repair_context(session: ForgeSession, repo_root: Path, source: str | N
         "working_tree_test_output_tail": _tail_lines(working_tree_log or "", LOG_TAIL_LINE_LIMIT),
         "semantic_review": semantic_review,
         "llm_review": llm_review,
+        "operation_error": operation_error,
         "plan_constraints_check": plan_constraints_check,
         "warnings": _warnings(diff_warnings, semantic_review, llm_review),
         "current_files": [
@@ -141,6 +144,9 @@ def render_repair_context(context: dict) -> str:
             "LLM review:",
             _json_block(context.get("llm_review")),
             "",
+            "Operation error:",
+            _json_block(context.get("operation_error")),
+            "",
             "Plan constraints check:",
             _json_block(context.get("plan_constraints_check")),
             "",
@@ -149,6 +155,9 @@ def render_repair_context(context: dict) -> str:
             "",
             "Current relevant files:",
             _json_block(context.get("current_files")),
+            "",
+            "Current workspace file content:",
+            _current_workspace_content_section(context.get("current_files")),
         ]
     ).strip()
 
@@ -285,6 +294,7 @@ def _relevant_paths(
     repo_root: Path,
     file_changes: Any,
     plan_json: Any,
+    operation_error: Any,
     logs: list[str],
 ) -> list[str]:
     paths: list[str] = []
@@ -297,6 +307,9 @@ def _relevant_paths(
     if isinstance(plan_json, dict):
         for key in ["files_to_modify", "files_to_create"]:
             paths.extend(_string_list(plan_json.get(key)))
+
+    if isinstance(operation_error, dict) and isinstance(operation_error.get("path"), str):
+        paths.append(operation_error["path"])
 
     for log in logs:
         paths.extend(_paths_from_log(log))
@@ -316,6 +329,25 @@ def _relevant_paths(
             seen.add(normalized)
 
     return deduped
+
+
+def _current_workspace_content_section(current_files: Any) -> str:
+    if not isinstance(current_files, list) or not current_files:
+        return "(none)"
+
+    sections: list[str] = []
+    for file_context in current_files:
+        if not isinstance(file_context, dict):
+            continue
+        path = file_context.get("path") or "unknown"
+        sections.append(f"Current workspace content for {path}:")
+        if file_context.get("exists"):
+            sections.append(str(file_context.get("content_with_line_numbers") or ""))
+        else:
+            sections.append("<file does not exist>")
+        sections.append("")
+
+    return "\n".join(sections).strip() or "(none)"
 
 
 def _paths_from_log(log: str) -> list[str]:

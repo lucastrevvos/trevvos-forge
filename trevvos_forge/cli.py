@@ -593,6 +593,86 @@ def _build_handoff_context(
     return context, selected_paths
 
 
+def _build_proposal_context(
+    *,
+    repo_root: Path,
+    request: str,
+    target: Path | None,
+    profile: dict,
+    max_files: int = 8,
+    max_chars_per_file: int = 12_000,
+) -> tuple[str, list[str]]:
+    selected_paths = _select_proposal_files(
+        repo_root=repo_root,
+        target=target,
+        profile=profile,
+        max_files=max_files,
+    )
+    file_sections: list[str] = []
+
+    for relative_path in selected_paths:
+        content = read_workspace_file(
+            root=repo_root,
+            file_path=Path(relative_path),
+            max_chars=max_chars_per_file,
+        )
+        file_sections.append(
+            "\n".join(
+                [
+                    f"## File: {relative_path}",
+                    "",
+                    "Content with line numbers:",
+                    "",
+                    "```text",
+                    content_with_line_numbers(content),
+                    "```",
+                ]
+            )
+        )
+
+    target_text = str(target) if target is not None else "project"
+    files_text = "\n\n".join(file_sections) if file_sections else "No file contents selected."
+    context = "\n\n".join(
+        [
+            "# Advisory Technical Proposal Context",
+            "",
+            "Request:",
+            request,
+            "",
+            f"Target: {target_text}",
+            "",
+            build_project_profile_prompt_section(profile),
+            "",
+            "# Selected files and snippets",
+            "",
+            files_text,
+            "",
+            "# Proposal requirements",
+            "",
+            "- Do not implement the change.",
+            "- Prefer incremental, testable steps.",
+            "- Preserve existing behavior unless explicitly requested otherwise.",
+            "- Identify trade-offs, risks, unknowns, and verification commands.",
+            "- For broad work, break the proposal into milestones and name the safest first increment.",
+        ]
+    )
+    return context, selected_paths
+
+
+def _select_proposal_files(*, repo_root: Path, target: Path | None, profile: dict, max_files: int) -> list[str]:
+    if target is not None:
+        resolved_target = (repo_root / target).resolve()
+        try:
+            resolved_target.relative_to(repo_root.resolve())
+        except ValueError as exc:
+            raise DiffError(f"Target path is outside workspace: {target}") from exc
+        if not resolved_target.exists():
+            raise DiffError(f"Target path not found: {target}")
+        return _select_analysis_files(repo_root=repo_root, target=target, profile=profile, max_files=max_files)
+
+    return _select_analysis_files(repo_root=repo_root, target=None, profile=profile, max_files=max_files)
+
+
 def _handoff_target_guidance(target_ai: str) -> str:
     normalized = target_ai.lower().strip()
     if normalized == "codex":
@@ -1707,6 +1787,167 @@ def review_diff(
                 "failed",
                 message=str(exc),
                 artifacts=["diff_review_metadata.json"],
+            )
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def propose(
+    request: Annotated[
+        str,
+        typer.Argument(help="Technical request or intent to turn into a proposal."),
+    ],
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+    target: Annotated[
+        Path | None,
+        typer.Option("--target", help="Optional file or directory to prioritize."),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print proposal metadata as JSON."),
+    ] = False,
+    max_files: Annotated[
+        int,
+        typer.Option("--max-files", help="Maximum number of files to include."),
+    ] = 8,
+    max_chars: Annotated[
+        int,
+        typer.Option("--max-chars", help="Maximum characters per file."),
+    ] = 12_000,
+) -> None:
+    """
+    Generate a technical proposal in advisory mode without modifying files.
+    """
+    session = None
+    try:
+        if not request.strip():
+            raise DiffError("Proposal request cannot be empty.")
+
+        workspace_root = path.resolve()
+        settings = load_settings()
+        profile = scan_project(workspace_root)
+        save_project_profile(workspace_root, profile)
+        proposal_context, files_considered = _build_proposal_context(
+            repo_root=workspace_root,
+            request=request,
+            target=target,
+            profile=profile,
+            max_files=max_files,
+            max_chars_per_file=max_chars,
+        )
+        provider = build_provider(settings)
+
+        session = create_session(
+            root=workspace_root,
+            user_request=request,
+            command="propose",
+        )
+        _record_timeline_event(session, "propose_started", "trevvos propose", "started")
+
+        prompt_template = get_prompt("technical_proposal")
+        prompt = prompt_template.render(proposal_context=proposal_context)
+
+        write_session_text(session=session, file_name="context.md", content=proposal_context)
+        write_session_json(
+            session,
+            "selected_files.json",
+            {
+                "mode": "advisory",
+                "command": "propose",
+                "request": request,
+                "target": str(target) if target is not None else None,
+                "files_considered": files_considered,
+            },
+        )
+        write_session_json(session, "project_profile.json", profile)
+        write_session_text(session=session, file_name="proposal_prompt.md", content=prompt)
+
+        with console.status("[bold]Generating technical proposal with your local LLM...[/bold]", spinner="dots"):
+            raw_response = provider.generate(prompt)
+
+        write_session_text(session=session, file_name="proposal_raw_response.md", content=raw_response)
+        write_session_text(session=session, file_name="proposal.md", content=raw_response)
+
+        metadata = {
+            "mode": "advisory",
+            "command": "propose",
+            "request": request,
+            "target": str(target) if target is not None else None,
+            "prompt": prompt_template.ref,
+            "model": settings.model,
+            "files_considered": files_considered,
+            "status": "succeeded",
+            "artifacts": {
+                "proposal": "proposal.md",
+                "metadata": "proposal_metadata.json",
+                "prompt": "proposal_prompt.md",
+                "raw_response": "proposal_raw_response.md",
+                "project_profile": "project_profile.json",
+                "selected_files": "selected_files.json",
+                "context": "context.md",
+            },
+        }
+        write_session_json(session, "proposal_metadata.json", metadata)
+        session = update_session_status(session, "proposal_completed")
+        _record_timeline_event(
+            session,
+            "propose_completed",
+            "trevvos propose",
+            "succeeded",
+            artifacts=[
+                "proposal.md",
+                "proposal_metadata.json",
+                "proposal_prompt.md",
+                "proposal_raw_response.md",
+                "project_profile.json",
+                "selected_files.json",
+                "context.md",
+            ],
+        )
+
+        if json_output:
+            console.print(json.dumps(metadata, indent=2, ensure_ascii=False))
+            return
+
+        console.print("[green]Technical proposal generated.[/green]\n")
+        console.print(f"Session:          [bold]{session.metadata.id}[/bold]")
+        console.print("Mode:             advisory")
+        console.print(f"Target:           {metadata['target']}")
+        console.print(f"Files considered: {len(files_considered)}")
+        console.print(f"Prompt:           {prompt_template.ref}")
+        console.print(f"Model:            {settings.model}")
+        console.print("\n[bold]Saved files[/bold]")
+        console.print(f"  - {session.path / 'proposal.md'}")
+        console.print(f"  - {session.path / 'proposal_metadata.json'}")
+        console.print(f"  - {session.path / 'project_profile.json'}")
+        console.print("\n[bold]Proposal[/bold]\n")
+        console.print(raw_response)
+
+    except ForgeError as exc:
+        if session is not None:
+            write_session_json(
+                session,
+                "proposal_metadata.json",
+                {
+                    "mode": "advisory",
+                    "command": "propose",
+                    "request": request,
+                    "target": str(target) if target is not None else None,
+                    "status": "failed",
+                    "error": str(exc),
+                },
+            )
+            _record_timeline_event(
+                session,
+                "propose_failed",
+                "trevvos propose",
+                "failed",
+                message=str(exc),
+                artifacts=["proposal_metadata.json"],
             )
         print_error(str(exc))
         raise typer.Exit(code=1)

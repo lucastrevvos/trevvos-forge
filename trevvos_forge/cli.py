@@ -1562,6 +1562,156 @@ def spec(
         raise typer.Exit(code=1)
 
 
+@app.command("review-diff")
+def review_diff(
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+    staged: Annotated[
+        bool,
+        typer.Option("--staged", help="Review staged changes only."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print diff review metadata as JSON."),
+    ] = False,
+    max_diff_chars: Annotated[
+        int,
+        typer.Option("--max-diff-chars", help="Maximum diff characters to include in the prompt."),
+    ] = 60_000,
+) -> None:
+    """
+    Review local git diff in advisory mode without modifying files.
+    """
+    session = None
+    try:
+        workspace_root = path.resolve()
+        git_status = _run_git_capture(workspace_root, ["status", "--short"])
+        diff_args = ["diff", "--cached"] if staged else ["diff"]
+        diff_stat = _run_git_capture(workspace_root, [*diff_args, "--stat"])
+        diff_text = _run_git_capture(workspace_root, diff_args)
+
+        if not diff_text.strip():
+            console.print("[yellow]No local diff found to review.[/yellow]")
+            return
+
+        settings = load_settings()
+        profile = scan_project(workspace_root)
+        save_project_profile(workspace_root, profile)
+        review_context, files_changed = _build_diff_review_context(
+            profile=profile,
+            git_status=git_status,
+            diff_stat=diff_stat,
+            diff_text=diff_text,
+            staged=staged,
+            max_diff_chars=max_diff_chars,
+        )
+        provider = build_provider(settings)
+
+        session = create_session(
+            root=workspace_root,
+            user_request="review local diff",
+            command="review-diff",
+        )
+        _record_timeline_event(session, "review_diff_started", "trevvos review-diff", "started")
+
+        prompt_template = get_prompt("diff_review")
+        prompt = prompt_template.render(diff_review_context=review_context)
+
+        write_session_text(session=session, file_name="context.md", content=review_context)
+        write_session_text(session=session, file_name="git_status.txt", content=git_status)
+        write_session_text(session=session, file_name="diff_stat.txt", content=diff_stat)
+        write_session_text(session=session, file_name="local_diff.patch", content=diff_text)
+        write_session_json(session, "project_profile.json", profile)
+        write_session_text(session=session, file_name="diff_review_prompt.md", content=prompt)
+
+        with console.status("[bold]Reviewing local diff with your local LLM...[/bold]", spinner="dots"):
+            raw_response = provider.generate(prompt)
+
+        write_session_text(session=session, file_name="diff_review_raw_response.md", content=raw_response)
+        write_session_text(session=session, file_name="diff_review.md", content=raw_response)
+
+        metadata = {
+            "mode": "advisory",
+            "command": "review-diff",
+            "staged": staged,
+            "prompt": prompt_template.ref,
+            "model": settings.model,
+            "files_changed": files_changed,
+            "status": "succeeded",
+            "final_recommendation": _extract_final_recommendation(raw_response),
+            "artifacts": {
+                "review": "diff_review.md",
+                "metadata": "diff_review_metadata.json",
+                "local_diff": "local_diff.patch",
+                "git_status": "git_status.txt",
+                "diff_stat": "diff_stat.txt",
+                "context": "context.md",
+                "project_profile": "project_profile.json",
+            },
+        }
+        write_session_json(session, "diff_review_metadata.json", metadata)
+        session = update_session_status(session, "diff_review_completed")
+        _record_timeline_event(
+            session,
+            "review_diff_completed",
+            "trevvos review-diff",
+            "succeeded",
+            artifacts=[
+                "diff_review.md",
+                "diff_review_metadata.json",
+                "local_diff.patch",
+                "git_status.txt",
+                "diff_stat.txt",
+                "project_profile.json",
+                "context.md",
+            ],
+        )
+
+        if json_output:
+            console.print(json.dumps(metadata, indent=2, ensure_ascii=False))
+            return
+
+        console.print("[green]Diff review completed.[/green]\n")
+        console.print(f"Session:        [bold]{session.metadata.id}[/bold]")
+        console.print("Mode:           advisory")
+        console.print(f"Staged:         {str(staged).lower()}")
+        console.print(f"Files changed:  {len(files_changed)}")
+        console.print(f"Prompt:         {prompt_template.ref}")
+        console.print(f"Model:          {settings.model}")
+        console.print("\n[bold]Saved files[/bold]")
+        console.print(f"  - {session.path / 'diff_review.md'}")
+        console.print(f"  - {session.path / 'diff_review_metadata.json'}")
+        console.print(f"  - {session.path / 'local_diff.patch'}")
+        console.print("\n[bold]Review[/bold]\n")
+        console.print(raw_response)
+
+    except ForgeError as exc:
+        if session is not None:
+            write_session_json(
+                session,
+                "diff_review_metadata.json",
+                {
+                    "mode": "advisory",
+                    "command": "review-diff",
+                    "staged": staged,
+                    "status": "failed",
+                    "error": str(exc),
+                },
+            )
+            _record_timeline_event(
+                session,
+                "review_diff_failed",
+                "trevvos review-diff",
+                "failed",
+                message=str(exc),
+                artifacts=["diff_review_metadata.json"],
+            )
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def context(
     instruction: str,

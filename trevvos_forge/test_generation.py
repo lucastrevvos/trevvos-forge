@@ -444,11 +444,13 @@ def build_test_generation_summary(
     write: bool,
     status: str,
     existing_tests_check: ExistingTestsCheck | None = None,
+    structure_validation: dict | None = None,
 ) -> str:
     changed = "\n".join(f"- {path}" for path in files_changed) or "- none"
     symbol = target.symbol.name if target.symbol is not None else "all"
     symbols_targeted = "\n".join(f"- {symbol.name}" for symbol in target.symbols)
     existing_tests_summary = _existing_tests_summary_section(existing_tests_check)
+    structure_summary = _structure_validation_summary_section(structure_validation)
     return f"""# Test Generation Summary
 
 Mode: controlled_execution
@@ -467,6 +469,10 @@ Status: {status}
 ## Existing tests
 
 {existing_tests_summary}
+
+## Test structure validation
+
+{structure_summary}
 
 Files changed:
 {changed}
@@ -489,6 +495,7 @@ def metadata_for_target(
     sandbox_command_source: str | None = None,
     symbol_selector: dict | None = None,
     existing_tests_check: ExistingTestsCheck | None = None,
+    structure_validation: dict | None = None,
     symbols_original: list[str] | None = None,
     provider_called: bool | None = None,
     write_allowed: bool | None = None,
@@ -517,6 +524,14 @@ def metadata_for_target(
             "status": existing_tests_check.status,
             "symbols_covered": existing_tests_check.symbols_covered,
             "symbols_missing": existing_tests_check.symbols_missing,
+        }
+
+    if structure_validation is not None:
+        metadata["test_structure_validation"] = {
+            "status": structure_validation.get("status"),
+            "errors": structure_validation.get("errors", []),
+            "warnings": structure_validation.get("warnings", []),
+            "discovered_tests": structure_validation.get("discovered_tests", []),
         }
 
     if provider_called is not None:
@@ -660,6 +675,104 @@ Covered:
 
 Missing:
 {missing}"""
+
+
+def _structure_validation_summary_section(structure_validation: dict | None) -> str:
+    if structure_validation is None:
+        return "Not run."
+
+    errors = "\n".join(f"- {error}" for error in structure_validation.get("errors", [])) or "- none"
+    warnings = "\n".join(f"- {warning}" for warning in structure_validation.get("warnings", [])) or "- none"
+    tests = "\n".join(f"- {test}" for test in structure_validation.get("discovered_tests", [])) or "- none"
+
+    return f"""Status: {structure_validation.get("status", "unknown")}
+
+Errors:
+{errors}
+
+Warnings:
+{warnings}
+
+Discovered tests:
+{tests}"""
+
+
+def build_tests_inspect_payload(*, source_path: str, check: ExistingTestsCheck) -> dict:
+    payload = check.to_dict()
+    payload["source_path"] = source_path
+    return payload
+
+
+def build_tests_inspect_metadata(
+    *,
+    source_path: str,
+    target: TestGenerationTarget,
+    check: ExistingTestsCheck,
+    status: str = "succeeded",
+) -> dict:
+    return {
+        "mode": "advisory",
+        "command": "tests inspect",
+        "source_path": source_path,
+        "test_file": target.test_file,
+        "symbol": target.symbol.name if target.symbol is not None else None,
+        "all": target.all_symbols,
+        "status": status,
+        "provider_called": False,
+        "coverage_status": check.status,
+    }
+
+
+def render_tests_inspect_report(*, source_path: str, check: ExistingTestsCheck) -> str:
+    covered_lines = []
+    for symbol in check.symbols_covered:
+        evidence = check.symbols[symbol].get("evidence", [])
+        evidence_text = ", ".join(evidence) if evidence else "evidence unavailable"
+        covered_lines.append(f"- {symbol}: {evidence_text}")
+
+    missing_lines = [f"- {symbol}" for symbol in check.symbols_missing]
+    covered = "\n".join(covered_lines) or "- none"
+    missing = "\n".join(missing_lines) or "- none"
+    symbols = _render_symbol_table(check)
+
+    return f"""# Test Coverage Inspection
+
+Source: {source_path}
+Test file: {check.test_file}
+Status: {check.status}
+Mode: {check.mode}
+
+## Symbols
+
+{symbols}
+
+## Covered
+
+{covered}
+
+## Missing
+
+{missing}
+
+## Next
+
+trevvos tests add {source_path} {'--all' if check.mode == 'all_symbols' else '--symbol ' + check.symbols_requested[0]}
+"""
+
+
+def _render_symbol_table(check: ExistingTestsCheck) -> str:
+    lines = []
+
+    for symbol in check.symbols_requested:
+        details = check.symbols[symbol]
+        if details.get("covered"):
+            evidence = details.get("evidence", [])
+            evidence_text = ", ".join(evidence) if evidence else "covered"
+            lines.append(f"- [covered] {symbol}: {evidence_text}")
+        else:
+            lines.append(f"- [missing] {symbol}")
+
+    return "\n".join(lines) or "- none"
 
 
 def raw_response_json(raw_response: str) -> dict:

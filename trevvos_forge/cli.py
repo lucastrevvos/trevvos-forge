@@ -125,12 +125,16 @@ from trevvos_forge.test_generation import (
     build_test_generation_context,
     build_test_generation_summary,
     build_test_generation_target,
+    build_tests_inspect_metadata,
+    build_tests_inspect_payload,
     metadata_for_target,
     raw_response_json,
+    render_tests_inspect_report,
     select_test_generation_commands,
     target_with_symbols,
     validate_file_changes_are_tests_only,
 )
+from trevvos_forge.test_structure_validation import validate_file_changes_test_structure
 from trevvos_forge.timeline import append_timeline_event, write_timeline_markdown
 from trevvos_forge.verification_coverage import (
     has_failed_verification_coverage,
@@ -3708,6 +3712,184 @@ def repair(
         raise typer.Exit(code=1)
 
 
+@tests_app.command("inspect")
+def tests_inspect(
+    source_path: Annotated[
+        Path | None,
+        typer.Argument(help="Python source file to inspect test coverage for."),
+    ] = None,
+    symbol: Annotated[
+        str | None,
+        typer.Option("--symbol", help="Function or class name to inspect."),
+    ] = None,
+    all_symbols: Annotated[
+        bool,
+        typer.Option("--all", help="Inspect all public testable symbols in the source file."),
+    ] = False,
+    test_file: Annotated[
+        Path | None,
+        typer.Option("--test-file", help="Target test file. Must be a test file path."),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Output machine-readable inspection summary."),
+    ] = False,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """
+    Inspect detected test coverage by symbol without generating tests.
+    """
+    session = None
+
+    try:
+        if source_path is None:
+            raise DiffError("Missing source_path.")
+        if symbol and all_symbols:
+            raise DiffError("Use either --symbol or --all, not both.")
+
+        inspect_all = all_symbols or symbol is None
+        workspace_root = path.resolve()
+        target = build_test_generation_target(
+            workspace_root=workspace_root,
+            source_path=source_path,
+            symbol=symbol,
+            all_symbols=inspect_all,
+            requested_test_file=test_file,
+        )
+        command_text = f"trevvos tests inspect {target.source_path}"
+        if target.all_symbols:
+            command_text += " --all"
+        elif target.symbol is not None:
+            command_text += f" --symbol {target.symbol.name}"
+        if test_file is not None:
+            command_text += f" --test-file {target.test_file}"
+
+        session = create_session(root=workspace_root, user_request=command_text, command="tests inspect")
+        _record_timeline_event(session, "tests_inspect_started", command_text, "started")
+
+        profile = scan_project(workspace_root)
+        save_project_profile(workspace_root, profile)
+        write_session_json(session, "project_profile.json", profile)
+
+        source_content = read_workspace_file(workspace_root, Path(target.source_path), max_chars=20_000)
+        test_path = workspace_root / target.test_file
+        test_content = (
+            read_workspace_file(workspace_root, Path(target.test_file), max_chars=20_000)
+            if test_path.exists()
+            else None
+        )
+        check = build_existing_tests_check(target=target, test_file_content=test_content)
+        payload = build_tests_inspect_payload(source_path=target.source_path, check=check)
+        metadata = build_tests_inspect_metadata(
+            source_path=target.source_path,
+            target=target,
+            check=check,
+        )
+        report = render_tests_inspect_report(source_path=target.source_path, check=check)
+        inspect_context = build_test_generation_context(
+            workspace_root=workspace_root,
+            target=target,
+            source_content=content_with_line_numbers(source_content),
+            test_content=content_with_line_numbers(test_content) if test_content is not None else None,
+            existing_tests_check=check,
+            force=False,
+        )
+
+        write_session_json(session, "tests_inspect.json", payload)
+        write_session_json(session, "tests_inspect_metadata.json", metadata)
+        write_session_text(session, "tests_inspect_report.md", report)
+        write_session_text(session, "context.md", inspect_context)
+        write_session_json(
+            session,
+            "selected_files.json",
+            build_selected_files_payload(
+                target,
+                test_file_size=len(test_content.splitlines()) if test_content is not None else 0,
+            ),
+        )
+
+        session = update_session_status(session, "tests_inspected")
+        _record_timeline_event(
+            session,
+            "tests_inspect_completed",
+            command_text,
+            "succeeded",
+            artifacts=[
+                "tests_inspect_report.md",
+                "tests_inspect.json",
+                "tests_inspect_metadata.json",
+                "project_profile.json",
+                "selected_files.json",
+                "context.md",
+            ],
+            coverage_status=check.status,
+        )
+
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "session": session.metadata.id,
+                        "status": check.status,
+                        "source_path": target.source_path,
+                        "test_file": target.test_file,
+                        "symbols_covered": check.symbols_covered,
+                        "symbols_missing": check.symbols_missing,
+                        "artifacts": {
+                            "report": str(session.path / "tests_inspect_report.md"),
+                            "json": str(session.path / "tests_inspect.json"),
+                        },
+                    },
+                    indent=2,
+                )
+            )
+            return
+
+        console.print("[green]Test coverage inspection completed.[/green]\n")
+        console.print(f"Source: {target.source_path}")
+        console.print(f"Test file: {target.test_file}")
+        console.print(f"Status: {check.status}")
+        console.print("\n[bold]Covered[/bold]")
+        if check.symbols_covered:
+            for covered_symbol in check.symbols_covered:
+                evidence = check.symbols[covered_symbol].get("evidence", [])
+                evidence_text = ", ".join(evidence) if evidence else "evidence unavailable"
+                console.print(f"  - {covered_symbol}: {evidence_text}")
+        else:
+            console.print("  - none")
+        console.print("\n[bold]Missing[/bold]")
+        if check.symbols_missing:
+            for missing_symbol in check.symbols_missing:
+                console.print(f"  - {missing_symbol}")
+        else:
+            console.print("  - none")
+        console.print("\n[bold]Saved files[/bold]")
+        console.print(f"  - {session.path / 'tests_inspect_report.md'}")
+        console.print(f"  - {session.path / 'tests_inspect.json'}")
+        console.print("\n[bold]Next[/bold]")
+        console.print(f"  trevvos tests add {target.source_path} {'--all' if target.all_symbols else '--symbol ' + target.symbol.name}")
+
+    except ForgeError as exc:
+        if session is not None:
+            write_session_text(session, "tests_inspect_error.txt", str(exc))
+            update_session_status(session, "tests_inspect_failed")
+            _record_timeline_event(
+                session,
+                "tests_inspect_failed",
+                "trevvos tests inspect",
+                "failed",
+                reason=type(exc).__name__,
+                message=str(exc),
+                artifacts=["tests_inspect_error.txt"],
+            )
+
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
 @tests_app.command("add")
 def tests_add(
     source_path: Annotated[
@@ -3908,6 +4090,57 @@ def tests_add(
         write_session_json(session, "test_file_changes.json", file_changes.to_dict())
         write_session_json(session, "file_changes.json", file_changes.to_dict())
 
+        files_changed = [change.path for change in file_changes.changes]
+        structure_validation = validate_file_changes_test_structure(
+            workspace_root=workspace_root,
+            file_changes=file_changes,
+            framework=target.framework,
+            source_symbols=[symbol.name for symbol in target.symbols],
+        )
+        write_session_json(session, "test_structure_validation.json", structure_validation)
+        if structure_validation["status"] == "failed":
+            metadata = metadata_for_target(
+                target=target,
+                write=write,
+                prompt_ref=prompt_template.ref,
+                status="failed_test_structure_validation",
+                files_changed=files_changed,
+                existing_tests_check=existing_tests_check,
+                structure_validation=structure_validation,
+                symbols_original=original_symbols,
+                provider_called=True,
+                write_allowed=False,
+            )
+            write_session_json(session, "test_generation_metadata.json", metadata)
+            write_session_text(
+                session,
+                "test_generation_summary.md",
+                build_test_generation_summary(
+                    target=target,
+                    files_changed=files_changed,
+                    write=write,
+                    status="failed_test_structure_validation",
+                    existing_tests_check=existing_tests_check,
+                    structure_validation=structure_validation,
+                ),
+            )
+            update_session_status(session, "tests_add_failed")
+            _record_timeline_event(
+                session,
+                "tests_add_failed",
+                command_text,
+                "failed",
+                reason="failed_test_structure_validation",
+                artifacts=[
+                    "test_structure_validation.json",
+                    "test_generation_metadata.json",
+                    "test_generation_summary.md",
+                ],
+            )
+            console.print("[red]Generated test file failed structural validation.[/red]")
+            console.print(f"Review {session.path / 'test_structure_validation.json'}.")
+            raise typer.Exit(code=1)
+
         diff_warnings: list[str] = []
         unified_diff = build_unified_diff_from_file_changes(
             workspace_root=workspace_root,
@@ -3989,7 +4222,6 @@ def tests_add(
             patch_apply=sandbox_metadata.get("patch_apply", "unknown"),
         )
 
-        files_changed = [change.path for change in file_changes.changes]
         write_allowed = sandbox_result.status == "passed"
         metadata = metadata_for_target(
             target=target,
@@ -4002,6 +4234,7 @@ def tests_add(
             sandbox_command_source=command_source,
             symbol_selector=symbol_selector,
             existing_tests_check=existing_tests_check,
+            structure_validation=structure_validation,
             symbols_original=original_symbols,
             provider_called=True,
             write_allowed=write_allowed,
@@ -4016,6 +4249,7 @@ def tests_add(
                 write=write,
                 status="diff_ready",
                 existing_tests_check=existing_tests_check,
+                structure_validation=structure_validation,
             ),
         )
 
@@ -4033,6 +4267,7 @@ def tests_add(
                 "test_generation_metadata.json",
                 "test_generation_summary.md",
                 "test_generation_validation.json",
+                "test_structure_validation.json",
                 "test_sandbox_results.json",
                 "test_sandbox_output.log",
             ],
@@ -4061,11 +4296,13 @@ def tests_add(
             console.print(f"  - {session.path / 'existing_tests_check.json'}")
             console.print(f"  - {session.path / 'test_diff.patch'}")
             console.print(f"  - {session.path / 'test_file_changes.json'}")
+            console.print(f"  - {session.path / 'test_structure_validation.json'}")
             console.print(f"  - {session.path / 'test_sandbox_results.json'}")
             console.print(f"  - {session.path / 'test_sandbox_output.log'}")
             console.print(f"  - {session.path / 'test_generation_metadata.json'}")
             console.print("\n[bold]Validations[/bold]")
             console.print("  - test-file-only safety validation: passed")
+            console.print("  - test structure validation: passed")
             console.print("  - git apply --check: passed")
             console.print(f"  - sandbox tests: {sandbox_result.status}")
             console.print("\n[bold]Test commands[/bold]")

@@ -49,6 +49,196 @@ class TestsAddCommandTests(unittest.TestCase):
 
         self.assertFalse(check["multiply"]["covered"])
 
+    def test_inspect_default_uses_all_symbols(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+
+            with patch("trevvos_forge.cli.build_provider") as build_provider:
+                result = runner.invoke(app, ["tests", "inspect", "calculator.py", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            build_provider.assert_not_called()
+            payload = _read_json(_only_session(root) / "tests_inspect.json")
+
+            self.assertEqual(payload["mode"], "all_symbols")
+            self.assertEqual(payload["symbols_requested"], ["add", "subtract", "multiply", "divide"])
+
+    def test_inspect_symbol_covered(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            tests_dir = root / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_calculator.py").write_text(
+                "def test_divide_by_zero():\n    assert True\n",
+                encoding="utf-8",
+            )
+
+            result = runner.invoke(app, ["tests", "inspect", "calculator.py", "--symbol", "divide", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            payload = _read_json(_only_session(root) / "tests_inspect.json")
+            self.assertEqual(payload["status"], "all_covered")
+            self.assertEqual(payload["symbols_covered"], ["divide"])
+            self.assertIn("test_divide_by_zero", payload["symbols"]["divide"]["evidence"])
+
+    def test_inspect_symbol_missing(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            tests_dir = root / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_calculator.py").write_text("def test_add():\n    add(1, 2)\n", encoding="utf-8")
+
+            result = runner.invoke(app, ["tests", "inspect", "calculator.py", "--symbol", "multiply", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            payload = _read_json(_only_session(root) / "tests_inspect.json")
+            self.assertEqual(payload["status"], "none")
+            self.assertEqual(payload["symbols_missing"], ["multiply"])
+
+    def test_inspect_missing_symbol_fails(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+
+            with patch("trevvos_forge.cli.build_provider") as build_provider:
+                result = runner.invoke(app, ["tests", "inspect", "calculator.py", "--symbol", "banana", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn("Symbol `banana` not found in calculator.py", result.output)
+            build_provider.assert_not_called()
+
+    def test_inspect_missing_test_file_is_not_applicable(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+
+            result = runner.invoke(app, ["tests", "inspect", "calculator.py", "--all", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            payload = _read_json(_only_session(root) / "tests_inspect.json")
+            self.assertEqual(payload["status"], "not_applicable")
+            self.assertEqual(payload["symbols_missing"], ["add", "subtract", "multiply", "divide"])
+
+    def test_inspect_uses_valid_test_file_option(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            test_dir = root / "test"
+            test_dir.mkdir()
+            (test_dir / "test_custom.py").write_text("def test_divide():\n    divide(4, 2)\n", encoding="utf-8")
+
+            result = runner.invoke(
+                app,
+                [
+                    "tests",
+                    "inspect",
+                    "calculator.py",
+                    "--symbol",
+                    "divide",
+                    "--test-file",
+                    "test/test_custom.py",
+                    "--path",
+                    str(root),
+                ],
+            )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            payload = _read_json(_only_session(root) / "tests_inspect.json")
+            self.assertEqual(payload["test_file"], "test/test_custom.py")
+            self.assertEqual(payload["status"], "all_covered")
+
+    def test_inspect_invalid_test_file_fails(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+
+            result = runner.invoke(
+                app,
+                ["tests", "inspect", "calculator.py", "--test-file", "calculator.py", "--path", str(root)],
+            )
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn(TEST_FILE_ERROR, result.output)
+
+    def test_inspect_symbol_and_all_are_mutually_exclusive(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+
+            result = runner.invoke(
+                app,
+                ["tests", "inspect", "calculator.py", "--symbol", "divide", "--all", "--path", str(root)],
+            )
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn("Use either --symbol or --all, not both.", result.output)
+
+    def test_inspect_saves_artifacts_without_generation_artifacts(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+
+            result = runner.invoke(app, ["tests", "inspect", "calculator.py", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            session_dir = _only_session(root)
+            for artifact in [
+                "tests_inspect_report.md",
+                "tests_inspect.json",
+                "tests_inspect_metadata.json",
+                "project_profile.json",
+                "selected_files.json",
+                "context.md",
+            ]:
+                self.assertTrue((session_dir / artifact).exists(), artifact)
+            for artifact in ["test_diff.patch", "test_file_changes.json", "file_changes.json", "apply_result.json"]:
+                self.assertFalse((session_dir / artifact).exists(), artifact)
+
+    def test_inspect_json_output(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+
+            result = runner.invoke(app, ["tests", "inspect", "calculator.py", "--json", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            payload = json.loads(result.output)
+            self.assertEqual(payload["status"], "not_applicable")
+            self.assertEqual(payload["source_path"], "calculator.py")
+
+    def test_inspect_timeline_events(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+
+            result = runner.invoke(app, ["tests", "inspect", "calculator.py", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            events = [event["event"] for event in read_timeline(_only_session(root))]
+            self.assertIn("tests_inspect_started", events)
+            self.assertIn("tests_inspect_completed", events)
+
+    def test_inspect_help(self) -> None:
+        result = CliRunner().invoke(app, ["tests", "inspect", "--help"])
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("--symbol", result.output)
+        self.assertIn("--all", result.output)
+
     def test_all_detects_public_functions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = _sample_repo(Path(temporary_directory))
@@ -160,6 +350,11 @@ class TestsAddCommandTests(unittest.TestCase):
         self.assertIn("use unittest to avoid adding external dependencies", prompt)
         self.assertIn("Mode: all_symbols", prompt)
         self.assertIn("generate tests for every listed symbol", prompt)
+        self.assertIn("The existing test file uses unittest", prompt)
+        self.assertIn("Do not add top-level pytest-style test functions", prompt)
+        self.assertIn("Do not use self outside TestCase methods", prompt)
+        self.assertIn("Do not nest test functions", prompt)
+        self.assertIn("Import every production symbol used", prompt)
 
     def test_all_prompt_receives_all_symbols(self) -> None:
         runner = CliRunner()
@@ -201,9 +396,11 @@ class TestsAddCommandTests(unittest.TestCase):
             tests_dir = root / "tests"
             tests_dir.mkdir()
             (tests_dir / "test_calculator.py").write_text(
+                "import unittest\n"
                 "from calculator import divide\n\n"
-                "def test_divide_by_zero():\n"
-                "    divide(1, 1)\n",
+                "class TestCalculator(unittest.TestCase):\n"
+                "    def test_divide_by_zero(self):\n"
+                "        divide(1, 1)\n",
                 encoding="utf-8",
             )
 
@@ -229,9 +426,11 @@ class TestsAddCommandTests(unittest.TestCase):
             tests_dir = root / "tests"
             tests_dir.mkdir()
             (tests_dir / "test_calculator.py").write_text(
+                "import unittest\n"
                 "from calculator import divide\n\n"
-                "def test_divide_by_zero():\n"
-                "    divide(1, 1)\n",
+                "class TestCalculator(unittest.TestCase):\n"
+                "    def test_divide_by_zero(self):\n"
+                "        divide(1, 1)\n",
                 encoding="utf-8",
             )
             provider = _FakeProvider(
@@ -243,7 +442,11 @@ class TestsAddCommandTests(unittest.TestCase):
                                 "change_type": "modified",
                                 "mode": "operation_based_edit",
                                 "operation": "append_to_file",
-                                "insert": "\n\ndef test_divide_negative_values():\n    assert divide(-4, 2) == -2\n",
+                                "insert": (
+                                    "\n\nclass TestGeneratedCalculator(unittest.TestCase):\n"
+                                    "    def test_divide_negative_values(self):\n"
+                                    "        self.assertEqual(divide(-4, 2), -2)\n"
+                                ),
                             }
                         ]
                     }
@@ -270,11 +473,13 @@ class TestsAddCommandTests(unittest.TestCase):
             tests_dir = root / "tests"
             tests_dir.mkdir()
             (tests_dir / "test_calculator.py").write_text(
+                "import unittest\n"
                 "from calculator import add, divide\n\n"
-                "def test_add_returns_sum():\n"
-                "    add(1, 2)\n\n"
-                "def test_divide_by_zero():\n"
-                "    divide(1, 1)\n",
+                "class TestCalculator(unittest.TestCase):\n"
+                "    def test_add_returns_sum(self):\n"
+                "        add(1, 2)\n\n"
+                "    def test_divide_by_zero(self):\n"
+                "        divide(1, 1)\n",
                 encoding="utf-8",
             )
             provider = _FakeProvider(
@@ -287,8 +492,12 @@ class TestsAddCommandTests(unittest.TestCase):
                                 "mode": "operation_based_edit",
                                 "operation": "append_to_file",
                                 "insert": (
-                                    "\n\ndef test_subtract():\n    assert True\n\n"
-                                    "def test_multiply():\n    assert True\n"
+                                    "\n\nfrom calculator import multiply, subtract\n\n"
+                                    "class TestGeneratedCalculator(unittest.TestCase):\n"
+                                    "    def test_subtract(self):\n"
+                                    "        self.assertEqual(subtract(2, 1), 1)\n\n"
+                                    "    def test_multiply(self):\n"
+                                    "        self.assertEqual(multiply(2, 2), 4)\n"
                                 ),
                             }
                         ]
@@ -318,11 +527,13 @@ class TestsAddCommandTests(unittest.TestCase):
             tests_dir = root / "tests"
             tests_dir.mkdir()
             (tests_dir / "test_calculator.py").write_text(
+                "import unittest\n"
                 "from calculator import add, subtract, multiply, divide\n\n"
-                "def test_add():\n    add(1, 2)\n"
-                "def test_subtract():\n    subtract(2, 1)\n"
-                "def test_multiply():\n    multiply(2, 2)\n"
-                "def test_divide():\n    divide(4, 2)\n",
+                "class TestCalculator(unittest.TestCase):\n"
+                "    def test_add(self):\n        add(1, 2)\n"
+                "    def test_subtract(self):\n        subtract(2, 1)\n"
+                "    def test_multiply(self):\n        multiply(2, 2)\n"
+                "    def test_divide(self):\n        divide(4, 2)\n",
                 encoding="utf-8",
             )
 
@@ -343,11 +554,17 @@ class TestsAddCommandTests(unittest.TestCase):
             tests_dir = root / "tests"
             tests_dir.mkdir()
             (tests_dir / "test_calculator.py").write_text(
+                "import unittest\n"
                 "from calculator import add, subtract, multiply, divide\n\n"
-                "def test_add():\n    add(1, 2)\n"
-                "def test_subtract():\n    subtract(2, 1)\n"
-                "def test_multiply():\n    multiply(2, 2)\n"
-                "def test_divide():\n    divide(4, 2)\n",
+                "class TestCalculator(unittest.TestCase):\n"
+                "    def test_add(self):\n"
+                "        add(1, 2)\n\n"
+                "    def test_subtract(self):\n"
+                "        subtract(2, 1)\n\n"
+                "    def test_multiply(self):\n"
+                "        multiply(2, 2)\n\n"
+                "    def test_divide(self):\n"
+                "        divide(4, 2)\n",
                 encoding="utf-8",
             )
             provider = _FakeProvider(
@@ -359,7 +576,11 @@ class TestsAddCommandTests(unittest.TestCase):
                                 "change_type": "modified",
                                 "mode": "operation_based_edit",
                                 "operation": "append_to_file",
-                                "insert": "\n\ndef test_extra_edge_case():\n    assert True\n",
+                                "insert": (
+                                    "\n\nclass TestGeneratedCalculator(unittest.TestCase):\n"
+                                    "    def test_extra_edge_case(self):\n"
+                                    "        self.assertTrue(True)\n"
+                                ),
                             }
                         ]
                     }
@@ -574,7 +795,12 @@ class TestsAddCommandTests(unittest.TestCase):
             root = _sample_repo(Path(temporary_directory))
             tests_dir = root / "tests"
             tests_dir.mkdir()
-            existing = "def test_existing():\n    assert True\n"
+            existing = (
+                "import unittest\n\n"
+                "class TestExisting(unittest.TestCase):\n"
+                "    def test_existing(self):\n"
+                "        self.assertTrue(True)\n"
+            )
             (tests_dir / "test_calculator.py").write_text(existing, encoding="utf-8")
             provider = _FakeProvider(
                 json.dumps(
@@ -608,6 +834,52 @@ class TestsAddCommandTests(unittest.TestCase):
             self.assertIn("def test_existing", content)
             self.assertIn("def test_divide_new", content)
 
+    def test_bad_generated_test_structure_is_rejected_before_sandbox(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            original_source = (root / "calculator.py").read_text(encoding="utf-8")
+            provider = _FakeProvider(_create_bad_structure_test_file_response())
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(app, ["tests", "add", "calculator.py", "--all", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn("Generated test file failed structural validation", result.output)
+            self.assertEqual((root / "calculator.py").read_text(encoding="utf-8"), original_source)
+            self.assertFalse((root / "tests" / "test_calculator.py").exists())
+            session_dir = _only_session(root)
+            structure = _read_json(session_dir / "test_structure_validation.json")
+            metadata = _read_json(session_dir / "test_generation_metadata.json")
+
+            self.assertEqual(structure["status"], "failed")
+            self.assertTrue(any("Top-level pytest-style test function" in error for error in structure["errors"]))
+            self.assertTrue(any("Nested test function" in error for error in structure["errors"]))
+            self.assertIn("Symbol `add` is used but not imported or defined.", structure["errors"])
+            self.assertEqual(metadata["status"], "failed_test_structure_validation")
+            self.assertFalse(metadata["write_allowed"])
+            self.assertFalse((session_dir / "test_sandbox_results.json").exists())
+            self.assertFalse((session_dir / "test_diff.patch").exists())
+
+    def test_write_yes_is_blocked_when_test_structure_is_invalid(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider(_create_bad_structure_test_file_response())
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(
+                    app,
+                    ["tests", "add", "calculator.py", "--all", "--write", "--yes", "--path", str(root)],
+                )
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertIn("Generated test file failed structural validation", result.output)
+            self.assertFalse((root / "tests" / "test_calculator.py").exists())
+            self.assertFalse((_only_session(root) / "test_apply_result.json").exists())
+
     def test_git_apply_check_and_artifacts_are_saved(self) -> None:
         runner = CliRunner()
 
@@ -630,6 +902,7 @@ class TestsAddCommandTests(unittest.TestCase):
                 "test_diff.patch",
                 "test_generation_metadata.json",
                 "test_generation_summary.md",
+                "test_structure_validation.json",
                 "test_sandbox_results.json",
                 "test_sandbox_output.log",
             ]:
@@ -899,6 +1172,7 @@ class TestsAddCommandTests(unittest.TestCase):
             self.assertEqual(result.exit_code, 0, result.output)
             summary = (_only_session(root) / "test_generation_summary.md").read_text(encoding="utf-8")
             self.assertIn("## Symbols targeted", summary)
+            self.assertIn("## Test structure validation", summary)
             for symbol in ["add", "subtract", "multiply", "divide"]:
                 self.assertIn(f"- {symbol}", summary)
 
@@ -1012,6 +1286,35 @@ def _create_all_test_file_response() -> str:
                         "        self.assertEqual(multiply(2, 3), 6)\n\n"
                         "    def test_divide(self):\n"
                         "        self.assertEqual(divide(6, 3), 2)\n"
+                    ),
+                }
+            ]
+        }
+    )
+
+
+def _create_bad_structure_test_file_response() -> str:
+    return json.dumps(
+        {
+            "changes": [
+                {
+                    "path": "tests/test_calculator.py",
+                    "change_type": "created",
+                    "mode": "operation_based_edit",
+                    "operation": "create_file",
+                    "content": (
+                        "import unittest\n"
+                        "from calculator import divide\n\n"
+                        "class TestCalculator(unittest.TestCase):\n"
+                        "    def test_divide_by_zero_raises_value_error(self):\n"
+                        "        with self.assertRaises(ValueError):\n"
+                        "            divide(10, 0)\n\n\n"
+                        "def test_add_positive_numbers():\n"
+                        "    self.assertEqual(add(1, 2), 3)\n\n"
+                        "    def test_add_negative_numbers():\n"
+                        "        self.assertEqual(add(-1, -2), -3)\n\n"
+                        "    def test_add_mixed_numbers():\n"
+                        "        self.assertEqual(add(-1, 2), 1)\n"
                     ),
                 }
             ]

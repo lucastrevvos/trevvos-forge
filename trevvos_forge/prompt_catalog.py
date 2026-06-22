@@ -728,6 +728,17 @@ Rules:
 - If an import is needed, add it without removing existing imports.
 - If unsure about the framework, use the style already present in the test file.
 - If no test style exists, use unittest to avoid adding external dependencies.
+- The existing test file uses unittest when Detected framework is unittest.
+- Add new unittest tests as methods inside a unittest.TestCase class.
+- Do not add top-level pytest-style test functions when the file uses unittest.
+- Do not use self outside TestCase methods.
+- The existing test file uses pytest when Detected framework is pytest.
+- Use top-level pytest test functions with plain assert or pytest.raises.
+- Do not use self.assertEqual or self.assertRaises in top-level pytest functions.
+- Do not nest test functions.
+- Import every production symbol used in the tests.
+- Generate tests that are discoverable by the selected framework.
+- Do not mix unittest and pytest styles unless the existing file already does so intentionally.
 - Do not alter conftest.py.
 - Do not install dependencies.
 - Do not modify pyproject.toml, requirements files, source files, app files, or docs.

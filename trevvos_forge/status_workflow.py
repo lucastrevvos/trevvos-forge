@@ -324,6 +324,7 @@ def _existing_artifacts(session_dir: Path) -> list[str]:
         "plan.md",
         "diff.patch",
         "diff_warnings.json",
+        "plan_constraints_check.json",
         "diff_validation.json",
         "diff_check.json",
         "change_summary.md",

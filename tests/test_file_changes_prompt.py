@@ -47,6 +47,7 @@ class FileChangesPromptTests(unittest.TestCase):
         prompt = get_prompt("file_changes_generation").render(
             workspace_context="context",
             plan="plan",
+            plan_constraints="Plan constraints\n\nFiles not to modify:\n- calculator.py",
             instruction="instruction",
         )
 
@@ -57,6 +58,26 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("insert_before_line", prompt)
         self.assertIn("replace_block", prompt)
         self.assertIn("append_to_file", prompt)
+
+    def test_file_changes_generation_prompt_contains_plan_constraints_rules(self) -> None:
+        prompt = get_prompt("file_changes_generation").render(
+            workspace_context="context",
+            plan="plan",
+            plan_constraints=(
+                "Plan constraints\n\n"
+                "Expected behavior:\n- python main.py add 2 3 prints 5\n\n"
+                "Acceptance criteria:\n- Uses argparse\n\n"
+                "Files not to modify:\n- calculator.py"
+            ),
+            instruction="instruction",
+        )
+
+        self.assertIn("Plan constraints", prompt)
+        self.assertIn("Files not to modify", prompt)
+        self.assertIn("hard constraints", prompt)
+        self.assertIn("Expected behavior", prompt)
+        self.assertIn("Acceptance criteria", prompt)
+        self.assertIn("calculator.py", prompt)
 
     def test_semantic_patch_review_prompt_contains_safety_rules(self) -> None:
         prompt = get_prompt("semantic_patch_review").render(

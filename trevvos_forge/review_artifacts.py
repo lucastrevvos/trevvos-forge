@@ -13,6 +13,7 @@ def build_change_summary_markdown(
     warnings: list[str],
     safety_validation: str = "passed",
     git_apply_check: str = "passed",
+    plan_constraints_status: str = "not_run",
 ) -> str:
     request_text = request.strip() if request and request.strip() else "Request unavailable in session metadata."
     files_changed = "\n".join(
@@ -43,6 +44,7 @@ def build_change_summary_markdown(
 
 - Forge safety validation: {safety_validation}
 - git apply --check: {git_apply_check}
+- Plan constraints: {plan_constraints_status}
 
 ## Warnings
 
@@ -57,6 +59,7 @@ def build_semantic_review_json(
     warnings: list[str],
     safety_validation: str = "passed",
     git_apply_check: str = "passed",
+    plan_constraints_status: str = "not_run",
 ) -> dict:
     return {
         "review_type": "deterministic",
@@ -76,6 +79,7 @@ def build_semantic_review_json(
         "validations": {
             "safety_validation": safety_validation,
             "git_apply_check": git_apply_check,
+            "plan_constraints": plan_constraints_status,
         },
         "warnings": warnings,
         "notes": [

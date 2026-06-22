@@ -32,6 +32,12 @@ from trevvos_forge.exceptions import (
 )
 from trevvos_forge.file_change_outputs import parse_file_changes_output
 from trevvos_forge.operation_error_artifacts import write_operation_error_artifacts
+from trevvos_forge.plan_constraints import (
+    build_plan_constraints_prompt_section,
+    check_file_changes_against_plan_constraints,
+    load_plan_constraints,
+    write_plan_constraints_check,
+)
 from trevvos_forge.prompt_catalog import get_prompt, list_prompts
 from trevvos_forge.providers.ollama import OllamaProvider
 from trevvos_forge.review_artifacts import (
@@ -807,6 +813,8 @@ def diff(
         instruction = read_session_text(session, "user_request.txt")
         workspace_context = read_session_text(session, "context.md")
         plan_markdown = read_session_text(session, "plan.md")
+        plan_constraints = load_plan_constraints(session.path)
+        plan_constraints_section = build_plan_constraints_prompt_section(plan_constraints)
 
         if retry:
             console.print("[bold]Retrying diff after operation error...[/bold]\n")
@@ -834,6 +842,7 @@ def diff(
                 instruction=instruction,
                 workspace_context=workspace_context,
                 plan=plan_markdown,
+                plan_constraints=plan_constraints_section,
             )
 
         write_session_text(
@@ -872,7 +881,21 @@ def diff(
             data=file_changes.to_dict(),
         )
 
+        plan_constraints_check = check_file_changes_against_plan_constraints(
+            file_changes=file_changes,
+            constraints=plan_constraints,
+        )
+        write_plan_constraints_check(session.path, plan_constraints_check)
+
+        if plan_constraints_check["status"] == "failed":
+            violations = plan_constraints_check.get("violations", [])
+            detail = violations[0] if violations else "plan constraints were violated."
+            raise DiffError(f"Diff rejected: file {detail}")
+
         diff_warnings: list[str] = []
+        if plan_constraints_check["status"] == "warning":
+            diff_warnings.extend(plan_constraints_check.get("warnings", []))
+
         unified_diff = build_unified_diff_from_file_changes(
             workspace_root=workspace_root,
             file_changes=file_changes,
@@ -921,11 +944,13 @@ def diff(
             request=instruction,
             file_changes=file_changes,
             warnings=diff_warnings,
+            plan_constraints_status=plan_constraints_check["status"],
         )
         semantic_review = build_semantic_review_json(
             request=instruction,
             file_changes=file_changes,
             warnings=diff_warnings,
+            plan_constraints_status=plan_constraints_check["status"],
         )
 
         write_session_text(
@@ -979,6 +1004,7 @@ def diff(
         console.print("\n[bold]Artifacts[/bold]")
         if retry:
             console.print(f"  - retry_metadata.json: {session.path / 'retry_metadata.json'}")
+        console.print(f"  - plan_constraints_check.json: {session.path / 'plan_constraints_check.json'}")
         console.print(f"  - diff.patch: {session.path / 'diff.patch'}")
         console.print(f"  - change_summary.md: {session.path / 'change_summary.md'}")
         console.print(f"  - semantic_review.json: {session.path / 'semantic_review.json'}")
@@ -997,6 +1023,7 @@ def diff(
         console.print("\n[bold]Saved files[/bold]")
         console.print(f"  - {session.path / 'file_changes_raw_response.json'}")
         console.print(f"  - {session.path / 'file_changes.json'}")
+        console.print(f"  - {session.path / 'plan_constraints_check.json'}")
         console.print(f"  - {session.path / 'diff.patch'}")
         if retry:
             console.print(f"  - {session.path / 'retry_metadata.json'}")

@@ -226,6 +226,13 @@ Nao modifique arquivos fora do contexto fornecido.
 Nao modifique .env, .git, .venv, node_modules, .trevvos, bin ou obj.
 Preserve integralmente o conteudo existente, exceto pelas mudancas explicitamente pedidas.
 Altere o minimo necessario.
+Trate "Files not to modify" nas constraints do plano como hard constraints.
+Nao modifique arquivos listados em "Files not to modify".
+Prefira criar arquivos listados em "Files to create".
+Prefira modificar apenas arquivos listados em "Files to modify".
+Se o plano pede uma CLI, implemente comportamento executavel compatível com Expected behavior.
+Nao apenas liste funcoes quando Expected behavior exigir comandos executaveis.
+Se a mudanca nao puder ser feita respeitando as constraints, retorne um erro estruturado em vez de inventar alteracoes.
 Nao reordene secoes, imports, blocos, listas ou paragrafos sem necessidade.
 Nao copie numeros de linha do contexto para o conteudo final.
 Nao concatene o texto novo em um paragrafo existente quando a intencao for inserir abaixo, depois, antes ou em nova linha.
@@ -373,6 +380,8 @@ Contexto do projeto:
 
 Plano tecnico:
 {plan}
+
+{plan_constraints}
 
 Pedido original:
 {instruction}

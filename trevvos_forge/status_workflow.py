@@ -36,6 +36,7 @@ def build_session_status(session_dir: Path, repo_root: Path | None = None) -> di
     deterministic_review = _read_json(session_dir / "semantic_review.json")
     commit_result = _read_json(session_dir / "commit_result.json")
     diff_warnings = _read_json(session_dir / "diff_warnings.json")
+    verification_coverage = _read_json(session_dir / "verification_coverage.json")
     apply_result = _read_json(session_dir / "apply_result.json")
     diff_check = _read_json(session_dir / "diff_check.json")
     agent_state = determine_agent_state(session_dir)
@@ -73,6 +74,7 @@ def build_session_status(session_dir: Path, repo_root: Path | None = None) -> di
         "artifacts": artifacts,
         "details": details,
         "agent_state": agent_state.to_dict(),
+        "verification_coverage": verification_coverage if isinstance(verification_coverage, dict) else None,
     }
     status["overall_status"] = determine_overall_status(status)
     status["next_recommended_command"] = agent_state.next_command
@@ -84,6 +86,10 @@ def determine_overall_status(status: dict) -> str:
     checks = status.get("checks", {})
     warnings = status.get("warnings", [])
     review = status.get("details", {}).get("review", {})
+    verification_coverage = status.get("verification_coverage")
+
+    if isinstance(verification_coverage, dict) and verification_coverage.get("status") == "failed":
+        return "needs_attention"
 
     if review.get("verdict") in {"has_concerns", "blocked"} or review.get("status") == "parse_failed":
         return "needs_attention"
@@ -399,6 +405,7 @@ def _existing_artifacts(session_dir: Path) -> list[str]:
         "plan_error.md",
         "plan_retry_prompt.md",
         "plan_retry_metadata.json",
+        "verification_coverage.json",
         "diff.patch",
         "diff_warnings.json",
         "plan_constraints_check.json",

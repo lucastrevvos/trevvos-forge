@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from trevvos_forge.timeline import read_timeline
+from trevvos_forge.verification_coverage import high_risk_warnings
 
 
 RETRY_LIMIT = 3
@@ -94,6 +95,20 @@ def determine_agent_state(session_dir: Path) -> AgentState:
             evidence=evidence,
         )
 
+    if _verification_coverage_failed(evidence):
+        return _state(
+            session_id=session_id,
+            phase="verification_coverage_failed",
+            status="needs_retry",
+            reason="Plan verification coverage failed.",
+            next_action="retry_plan",
+            next_command="trevvos plan --retry",
+            confidence="high",
+            blockers=blockers,
+            warnings=warnings,
+            evidence=evidence,
+        )
+
     if isinstance(evidence["file_changes_error"], dict):
         return _state(
             session_id=session_id,
@@ -123,6 +138,21 @@ def determine_agent_state(session_dir: Path) -> AgentState:
         )
 
     has_diff = evidence["has_diff"] and evidence["has_file_changes"]
+    high_risk = high_risk_warnings(evidence.get("diff_warnings"))
+    if has_diff and high_risk:
+        return _state(
+            session_id=session_id,
+            phase="blocked_warning",
+            status="blocked",
+            reason="Work blocked by structural edit warning.",
+            next_action=None,
+            next_command="trevvos review --no-llm",
+            confidence="high",
+            blockers=blockers,
+            warnings=warnings,
+            evidence=evidence,
+        )
+
     if _review_has_concerns(evidence):
         return _state(
             session_id=session_id,
@@ -313,6 +343,7 @@ def _collect_evidence(session_dir: Path, metadata: Any) -> dict:
         "file_changes_error": _read_json(session_dir / "file_changes_error.json"),
         "operation_error": _read_json(session_dir / "operation_error.json"),
         "plan_constraints_check": _read_json(session_dir / "plan_constraints_check.json"),
+        "verification_coverage": _read_json(session_dir / "verification_coverage.json"),
         "sandbox_test_results": sandbox,
         "working_tree_test_results": working_tree,
         "semantic_review": _read_json(session_dir / "semantic_review.json"),
@@ -360,6 +391,7 @@ def _evidence_summary(evidence: dict) -> dict:
     return {
         "has_plan": evidence.get("has_plan"),
         "has_plan_error": isinstance(evidence.get("plan_error"), dict),
+        "verification_coverage_status": _verification_coverage_status(evidence.get("verification_coverage")),
         "has_diff": evidence.get("has_diff"),
         "has_file_changes": evidence.get("has_file_changes"),
         "sandbox_status": _test_status(evidence.get("sandbox_test_results")),
@@ -396,6 +428,17 @@ def _warnings(evidence: dict) -> list[str]:
     if not isinstance(diff_warnings, dict) or not isinstance(diff_warnings.get("warnings"), list):
         return []
     return [warning for warning in diff_warnings["warnings"] if isinstance(warning, str)]
+
+
+def _verification_coverage_failed(evidence: dict) -> bool:
+    return _verification_coverage_status(evidence.get("verification_coverage")) == "failed"
+
+
+def _verification_coverage_status(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return "not_run"
+    status = payload.get("status")
+    return status if status in {"passed", "warning", "failed"} else "unknown"
 
 
 def _review_has_concerns(evidence: dict) -> bool:

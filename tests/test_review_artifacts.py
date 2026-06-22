@@ -193,6 +193,38 @@ class ReviewArtifactsTests(unittest.TestCase):
         self.assertIn("Working tree tests failed.", review["concerns"])
         self.assertIn("Plan constraints check failed.", review["concerns"])
 
+    def test_semantic_review_concerns_for_failed_verification_coverage(self) -> None:
+        file_changes = FileChangesOutput(
+            changes=[
+                FileChange(
+                    path="main.py",
+                    change_type="modified",
+                    content="print('ok')\n",
+                    mode="full_file_rewrite",
+                )
+            ]
+        )
+
+        review = build_semantic_review_json(
+            request="Add sqrt CLI",
+            file_changes=file_changes,
+            warnings=[],
+            plan={
+                "acceptance_criteria": ["sqrt command runs"],
+                "expected_behavior": ["python main.py sqrt 9 prints 3.0"],
+                "suggested_verification_commands": ["python -m py_compile main.py"],
+            },
+            verification_coverage={
+                "status": "failed",
+                "missing": ["python main.py sqrt 9"],
+            },
+        )
+
+        self.assertIn(
+            "Expected behavior command `python main.py sqrt 9` is not covered by suggested verification commands.",
+            review["concerns"],
+        )
+
     def test_render_deterministic_review_text_contains_sections(self) -> None:
         text = render_deterministic_review_text(
             {

@@ -64,6 +64,7 @@ def build_semantic_review_json(
     plan_constraints_status: str = "not_run",
     plan: dict[str, Any] | None = None,
     plan_constraints_check: dict[str, Any] | None = None,
+    verification_coverage: dict[str, Any] | None = None,
     sandbox_test_results: dict[str, Any] | None = None,
     working_tree_test_results: dict[str, Any] | None = None,
 ) -> dict:
@@ -84,6 +85,7 @@ def build_semantic_review_json(
         plan_constraints_status=plan_constraints_status,
         plan=plan,
         plan_constraints_check=plan_constraints_check,
+        verification_coverage=verification_coverage,
         sandbox_test_results=sandbox_test_results,
         working_tree_test_results=working_tree_test_results,
     )
@@ -100,6 +102,7 @@ def build_semantic_review_json_from_context(context: dict[str, Any]) -> dict:
         validations = {}
 
     plan_constraints_check = context.get("plan_constraints_check")
+    verification_coverage = context.get("verification_coverage")
     plan_constraints_status = validations.get("plan_constraints", "not_run")
     if isinstance(plan_constraints_check, dict):
         plan_constraints_status = plan_constraints_check.get("status", plan_constraints_status)
@@ -129,6 +132,7 @@ def build_semantic_review_json_from_context(context: dict[str, Any]) -> dict:
         plan_constraints_status=plan_constraints_status,
         plan=context.get("plan") if isinstance(context.get("plan"), dict) else None,
         plan_constraints_check=plan_constraints_check if isinstance(plan_constraints_check, dict) else None,
+        verification_coverage=verification_coverage if isinstance(verification_coverage, dict) else None,
         sandbox_test_results=(
             context.get("sandbox_test_results")
             if isinstance(context.get("sandbox_test_results"), dict)
@@ -180,6 +184,7 @@ def _semantic_review_payload(
     plan_constraints_status: str,
     plan: dict[str, Any] | None,
     plan_constraints_check: dict[str, Any] | None,
+    verification_coverage: dict[str, Any] | None,
     sandbox_test_results: dict[str, Any] | None,
     working_tree_test_results: dict[str, Any] | None,
 ) -> dict:
@@ -203,6 +208,7 @@ def _semantic_review_payload(
         plan_review=plan_review,
         test_evidence=test_evidence,
         plan_constraints=plan_constraints,
+        verification_coverage=verification_coverage,
     )
     merged_warnings = _dedupe_strings([*warnings, *generated_warnings])
 
@@ -221,6 +227,7 @@ def _semantic_review_payload(
         "plan_review": plan_review,
         "test_evidence": test_evidence,
         "plan_constraints": plan_constraints,
+        "verification_coverage": verification_coverage or {"status": "not_run"},
         "concerns": concerns,
         "warnings": merged_warnings,
         "notes": [
@@ -291,6 +298,7 @@ def _review_findings(
     plan_review: dict[str, Any],
     test_evidence: dict[str, str],
     plan_constraints: dict[str, str],
+    verification_coverage: dict[str, Any] | None,
 ) -> tuple[list[str], list[str]]:
     concerns: list[str] = []
     warnings: list[str] = []
@@ -312,6 +320,16 @@ def _review_findings(
 
     if plan_constraints.get("status") == "failed":
         concerns.append("Plan constraints check failed.")
+
+    if isinstance(verification_coverage, dict) and verification_coverage.get("status") == "failed":
+        missing = _string_list(verification_coverage.get("missing"))
+        if missing:
+            for command in missing:
+                concerns.append(
+                    f"Expected behavior command `{command}` is not covered by suggested verification commands."
+                )
+        else:
+            concerns.append("Plan verification coverage failed.")
 
     if not _string_list_from_dict(plan, "acceptance_criteria"):
         warnings.append("No acceptance criteria were available in the plan.")

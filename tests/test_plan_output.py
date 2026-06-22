@@ -104,6 +104,7 @@ class PlanCliTests(unittest.TestCase):
                         "suggested_verification_commands": [
                             "python -m py_compile main.py calculator.py",
                             "python main.py add 2 3",
+                            "python main.py divide 10 2",
                         ],
                         "files_to_create": ["main.py"],
                         "files_to_modify": [],
@@ -131,6 +132,7 @@ class PlanCliTests(unittest.TestCase):
             session_dir = next((root / ".trevvos" / "sessions").iterdir())
             plan_json = json.loads((session_dir / "plan.json").read_text(encoding="utf-8"))
             plan_markdown = (session_dir / "plan.md").read_text(encoding="utf-8")
+            verification_coverage = json.loads((session_dir / "verification_coverage.json").read_text(encoding="utf-8"))
 
             self.assertEqual(plan_json["expected_behavior"][0], "python main.py add 2 3 prints 5")
             self.assertEqual(plan_json["files_to_create"], ["main.py"])
@@ -139,6 +141,7 @@ class PlanCliTests(unittest.TestCase):
             self.assertIn("python main.py divide 10 2 prints 5.0", plan_markdown)
             self.assertIn("## Suggested commands to verify", plan_markdown)
             self.assertIn("python main.py add 2 3", plan_markdown)
+            self.assertEqual(verification_coverage["status"], "passed")
 
     def test_plan_saves_plan_error_for_invalid_json(self) -> None:
         runner = CliRunner()

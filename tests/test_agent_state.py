@@ -59,6 +59,16 @@ class AgentStateTests(unittest.TestCase):
             self.assertEqual(state.phase, "diff_failed_operation")
             self.assertEqual(state.next_command, "trevvos diff --retry")
 
+    def test_verification_coverage_failed_recommends_plan_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            session_dir = _session(Path(temporary_directory), plan=True)
+            _write_json(session_dir / "verification_coverage.json", {"status": "failed"})
+
+            state = determine_agent_state(session_dir)
+
+            self.assertEqual(state.phase, "verification_coverage_failed")
+            self.assertEqual(state.next_command, "trevvos plan --retry")
+
     def test_plan_without_diff_recommends_diff(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             session_dir = _session(Path(temporary_directory), plan=True)
@@ -118,6 +128,19 @@ class AgentStateTests(unittest.TestCase):
 
             self.assertEqual(state.phase, "ready_to_apply")
             self.assertEqual(state.next_command, "trevvos apply")
+
+    def test_high_risk_diff_warning_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            session_dir = _session(Path(temporary_directory), plan=True, diff=True)
+            _write_json(
+                session_dir / "diff_warnings.json",
+                {"warnings": ["Small file structural edit risk: main.py received local append operations."]},
+            )
+
+            state = determine_agent_state(session_dir)
+
+            self.assertEqual(state.phase, "blocked_warning")
+            self.assertEqual(state.next_command, "trevvos review --no-llm")
 
     def test_apply_without_working_tree_test_recommends_test(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

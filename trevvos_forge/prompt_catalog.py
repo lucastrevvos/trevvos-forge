@@ -110,6 +110,9 @@ Behavior-first planning rules:
 - Include Expected behavior with observable examples.
 - Include Acceptance criteria with verifiable outcomes.
 - Include Suggested commands to verify with executable commands when possible.
+- If expected behavior includes an executable command, include that exact command or an equivalent command in suggested_verification_commands.
+- For CLI tasks, suggested_verification_commands must include runtime CLI commands, not only py_compile/build commands.
+- For each expected behavior command, include a verification command that exercises it.
 - Separate Files to create, Files to modify, and Files not to modify.
 - If the user asks for a CLI, treat CLI as an executable command interface, not only a function listing, unless the user explicitly asks only to list functions.
 - For a simple Python CLI, prefer argparse, a main() function, if __name__ == "__main__": main(), subcommands registered before parse_args(), and dispatch inside main().
@@ -159,6 +162,29 @@ Example for Python CLI:
 - Acceptance criteria: The CLI uses argparse; subcommands are registered before parse_args(); runtime dispatch happens inside main().
 - Suggested commands to verify: python -m py_compile main.py calculator.py; python main.py add 2 3; python main.py divide 10 2; python main.py divide 10 0.
 
+Correct verification coverage example:
+{{
+  "expected_behavior": [
+    "python main.py sqrt 9 prints 3.0"
+  ],
+  "suggested_verification_commands": [
+    "python -m py_compile calculator.py main.py",
+    "python main.py sqrt 9"
+  ]
+}}
+
+Incorrect verification coverage example:
+{{
+  "expected_behavior": [
+    "python main.py sqrt 9 prints 3.0"
+  ],
+  "suggested_verification_commands": [
+    "python -m py_compile calculator.py main.py"
+  ]
+}}
+
+The incorrect example above is not sufficient because it checks syntax only, not runtime CLI behavior.
+
 Contexto do projeto:
 {workspace_context}
 
@@ -201,6 +227,9 @@ Behavior-first planning rules:
 - Include expected_behavior with observable examples.
 - Include acceptance_criteria with verifiable outcomes.
 - Include suggested_verification_commands with executable commands when possible.
+- If expected behavior includes an executable command, include that exact command or an equivalent command in suggested_verification_commands.
+- For CLI tasks, suggested_verification_commands must include runtime CLI commands, not only py_compile/build commands.
+- For each expected behavior command, include a verification command that exercises it.
 - Separate files_to_create, files_to_modify, and files_not_to_modify.
 - If the user asks for a CLI, treat CLI as an executable command interface.
 - For a simple Python CLI, prefer argparse, a main() function, if __name__ == "__main__": main(), subcommands registered before parse_args(), and dispatch inside main().
@@ -235,6 +264,29 @@ Expected JSON shape:
   ],
   "next_command": "trevvos diff"
 }}
+
+Correct verification coverage example:
+{{
+  "expected_behavior": [
+    "python main.py sqrt 9 prints 3.0"
+  ],
+  "suggested_verification_commands": [
+    "python -m py_compile calculator.py main.py",
+    "python main.py sqrt 9"
+  ]
+}}
+
+Incorrect verification coverage example:
+{{
+  "expected_behavior": [
+    "python main.py sqrt 9 prints 3.0"
+  ],
+  "suggested_verification_commands": [
+    "python -m py_compile calculator.py main.py"
+  ]
+}}
+
+The incorrect example above is not sufficient because it checks syntax only, not runtime CLI behavior.
 
 Retry context:
 {retry_context}

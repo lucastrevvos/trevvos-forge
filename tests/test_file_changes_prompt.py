@@ -42,6 +42,10 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("create files under tests/", prompt)
         self.assertIn("do not embed tests in the runtime file", prompt)
         self.assertIn("python -m unittest discover -s tests", prompt)
+        self.assertIn("executable command", prompt)
+        self.assertIn("suggested_verification_commands", prompt)
+        self.assertIn("not only py_compile", prompt)
+        self.assertIn("exact command or an equivalent command", prompt)
 
     def test_plan_retry_prompt_contains_schema_rules(self) -> None:
         prompt = get_prompt("plan_retry").render(
@@ -57,6 +61,8 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("files_to_create", prompt)
         self.assertIn("files_to_modify", prompt)
         self.assertIn("files_not_to_modify", prompt)
+        self.assertIn("not only py_compile", prompt)
+        self.assertIn("exact command or an equivalent command", prompt)
         self.assertIn("retry context", prompt)
 
     def test_prompt_contains_markdown_editing_rules(self) -> None:

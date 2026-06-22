@@ -47,6 +47,7 @@ def build_review_context(
     file_changes = _read_optional_json(session_dir / "file_changes.json")
     diff_warnings = _read_optional_json(session_dir / "diff_warnings.json")
     plan_constraints_check = _read_optional_json(session_dir / "plan_constraints_check.json")
+    verification_coverage = _read_optional_json(session_dir / "verification_coverage.json")
     legacy_test_results = _read_optional_json(session_dir / "test_results.json")
     sandbox_test_results = _mode_specific_test_results(
         session_dir=session_dir,
@@ -92,6 +93,9 @@ def build_review_context(
 
     if isinstance(plan_constraints_check, dict):
         evidence_used.append("plan_constraints_check.json")
+
+    if isinstance(verification_coverage, dict):
+        evidence_used.append("verification_coverage.json")
 
     if sandbox_test_results is not None:
         evidence_used.append("sandbox_test_results.json" if (session_dir / "sandbox_test_results.json").exists() else "test_results.json")
@@ -140,6 +144,7 @@ def build_review_context(
         "plan": plan,
         "plan_markdown": plan_markdown,
         "plan_constraints_check": plan_constraints_check if isinstance(plan_constraints_check, dict) else None,
+        "verification_coverage": verification_coverage if isinstance(verification_coverage, dict) else None,
         "files_changed": _files_changed(file_changes, deterministic_review),
         "patch_available": diff_patch is not None and bool(diff_patch.strip()),
         "patch_preview": patch_preview,

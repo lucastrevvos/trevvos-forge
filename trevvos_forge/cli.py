@@ -101,6 +101,11 @@ from trevvos_forge.test_runner import (
     write_test_artifacts,
 )
 from trevvos_forge.timeline import append_timeline_event, write_timeline_markdown
+from trevvos_forge.verification_coverage import (
+    has_failed_verification_coverage,
+    high_risk_warnings,
+    write_verification_coverage,
+)
 from trevvos_forge.work_workflow import build_work_metadata, write_work_artifacts
 from trevvos_forge.workspace import read_workspace_file, scan_workspace
 
@@ -277,6 +282,7 @@ def _record_timeline_event(session, event: str, command: str, status: str, **fie
 
 def _build_plan_retry_context(session) -> str:
     error = _read_json_file(session.path / "plan_error.json")
+    verification_coverage = _read_json_file(session.path / "verification_coverage.json")
     user_request = _read_optional_text(session.path / "user_request.txt")
     prompt = _read_optional_text(session.path / "prompt.md")
     raw_response = _read_optional_text(session.path / "plan_raw_response.md")
@@ -288,6 +294,10 @@ def _build_plan_retry_context(session) -> str:
             user_request or "",
             "Previous plan error:",
             json.dumps(error, indent=2, ensure_ascii=False) if isinstance(error, dict) else "",
+            "Verification coverage:",
+            json.dumps(verification_coverage, indent=2, ensure_ascii=False)
+            if isinstance(verification_coverage, dict)
+            else "",
             "Previous raw response:",
             raw_response or "",
             "Previous prompt:",
@@ -981,7 +991,12 @@ def work(
 
             if action == "retry_plan":
                 if plan_retries_used >= max_plan_retries:
-                    finish("blocked", state, "max_plan_retries_reached", exit_code=1)
+                    reason = (
+                        "verification_coverage_failed"
+                        if state.phase == "verification_coverage_failed"
+                        else "max_plan_retries_reached"
+                    )
+                    finish("blocked", state, reason, exit_code=1)
                     return
                 plan_retries_used += 1
                 run_step("plan_retry", lambda: plan(instruction=None, path=workspace_root, retry=True))
@@ -1067,13 +1082,16 @@ def plan(
         if retry:
             session = get_current_session(path)
             plan_error = _read_json_file(session.path / "plan_error.json")
-            if not isinstance(plan_error, dict):
+            coverage_retry = has_failed_verification_coverage(session.path)
+            if not isinstance(plan_error, dict) and not coverage_retry:
                 raise DiffError("No plan_error.json found for current session.")
 
             retry_count = _plan_retry_count(session)
-            previous_error_type = (
-                plan_error.get("error_type") if isinstance(plan_error.get("error_type"), str) else None
-            )
+            previous_error_type = None
+            if isinstance(plan_error, dict) and isinstance(plan_error.get("error_type"), str):
+                previous_error_type = plan_error["error_type"]
+            if previous_error_type is None and coverage_retry:
+                previous_error_type = "verification_coverage_failed"
             prompt_template = get_prompt("plan_retry")
             prompt = prompt_template.render(retry_context=_build_plan_retry_context(session))
 
@@ -1134,15 +1152,32 @@ def plan(
                 raise typer.Exit(code=1)
 
             write_session_json(session=session, file_name="plan.json", data=plan_output.to_dict())
+            verification_coverage = write_verification_coverage(session, plan_output.to_dict())
             plan_markdown = plan_output.to_markdown()
             write_session_text(session=session, file_name="plan.md", content=plan_markdown)
-            _clear_plan_error_artifacts(session)
+            retry_status = "failed" if verification_coverage["status"] == "failed" else "succeeded"
+            if retry_status == "succeeded":
+                _clear_plan_error_artifacts(session)
             _write_plan_retry_metadata(
                 session,
                 retry_count=retry_count,
                 previous_error_type=previous_error_type,
-                status="succeeded",
+                status=retry_status,
             )
+            if retry_status == "failed":
+                update_session_status(session, "plan_failed")
+                _record_timeline_event(
+                    session,
+                    "plan_retry_failed",
+                    "trevvos plan --retry",
+                    "failed",
+                    reason="verification_coverage_failed",
+                    artifacts=["plan.json", "plan.md", "verification_coverage.json", "plan_retry_metadata.json"],
+                    next_recommended_command="trevvos plan --retry",
+                )
+                console.print("[red]Plan retry failed verification coverage.[/red]")
+                console.print(f"  - {session.path / 'verification_coverage.json'}")
+                raise typer.Exit(code=1)
             session = update_session_status(session, "planned")
             _record_timeline_event(
                 session,
@@ -1150,7 +1185,7 @@ def plan(
                 "trevvos plan --retry",
                 "succeeded",
                 reason=previous_error_type,
-                artifacts=["plan_raw_response.md", "plan.json", "plan.md", "plan_retry_metadata.json"],
+                artifacts=["plan_raw_response.md", "plan.json", "plan.md", "verification_coverage.json", "plan_retry_metadata.json"],
                 next_recommended_command="trevvos diff",
             )
             _record_timeline_event(
@@ -1158,7 +1193,7 @@ def plan(
                 "plan_completed",
                 "trevvos plan --retry",
                 "succeeded",
-                artifacts=["plan_raw_response.md", "plan.json", "plan.md", "plan_retry_metadata.json"],
+                artifacts=["plan_raw_response.md", "plan.json", "plan.md", "verification_coverage.json", "plan_retry_metadata.json"],
                 next_recommended_command="trevvos diff",
             )
 
@@ -1170,6 +1205,7 @@ def plan(
             console.print(f"  - {session.path / 'plan_raw_response.md'}")
             console.print(f"  - {session.path / 'plan.json'}")
             console.print(f"  - {session.path / 'plan.md'}")
+            console.print(f"  - {session.path / 'verification_coverage.json'}")
             console.print(f"  - {session.path / 'plan_retry_metadata.json'}")
             console.print("\n[bold]Next[/bold]")
             console.print("  trevvos diff")
@@ -1276,6 +1312,7 @@ def plan(
             file_name="plan.json",
             data=plan_output.to_dict(),
         )
+        verification_coverage = write_verification_coverage(session, plan_output.to_dict())
 
         plan_markdown = plan_output.to_markdown()
 
@@ -1299,6 +1336,7 @@ def plan(
                 "plan_raw_response.md",
                 "plan.json",
                 "plan.md",
+                "verification_coverage.json",
             ],
             next_recommended_command="trevvos diff",
         )
@@ -1327,6 +1365,12 @@ def plan(
         console.print(f"  - {session.path / 'plan_raw_response.md'}")
         console.print(f"  - {session.path / 'plan.json'}")
         console.print(f"  - {session.path / 'plan.md'}")
+        console.print(f"  - {session.path / 'verification_coverage.json'}")
+
+        if verification_coverage["status"] == "failed":
+            console.print("\n[bold yellow]Verification coverage warnings[/bold yellow]")
+            for warning in verification_coverage.get("warnings", []):
+                console.print(f"  - {warning}")
 
         console.print("\n[bold]Plan[/bold]\n")
         console.print(plan_markdown)
@@ -1573,6 +1617,7 @@ def diff(
             plan_constraints_status=plan_constraints_check["status"],
             plan=plan_constraints,
             plan_constraints_check=plan_constraints_check,
+            verification_coverage=_read_json_file(session.path / "verification_coverage.json"),
         )
 
         write_session_text(
@@ -1996,6 +2041,7 @@ def repair(
             plan_constraints_status=plan_constraints_check["status"],
             plan=plan_constraints,
             plan_constraints_check=plan_constraints_check,
+            verification_coverage=_read_json_file(session.path / "verification_coverage.json"),
         )
 
         write_session_text(session=session, file_name="change_summary.md", content=change_summary)
@@ -2196,6 +2242,9 @@ def apply(
                 console.print(f"  {line}")
 
         warnings = _load_diff_warnings(session.path)
+        verification_coverage = _read_json_file(session.path / "verification_coverage.json")
+        high_risk = high_risk_warnings(warnings)
+        coverage_failed = isinstance(verification_coverage, dict) and verification_coverage.get("status") == "failed"
 
         console.print("\n[bold]Validations[/bold]")
         console.print("  - Forge safety validation: passed")
@@ -2208,6 +2257,13 @@ def apply(
                 console.print(f"  - [yellow]{warning}[/yellow]")
         else:
             console.print("  - None")
+
+        if high_risk or coverage_failed:
+            console.print("\n[bold red]High-risk warnings detected.[/bold red]")
+            console.print("This patch may be syntactically valid but behaviorally unsafe.")
+            console.print("\nRecommended:")
+            console.print("  trevvos review --no-llm")
+            console.print("  trevvos test --sandbox --plan-commands")
 
         console.print("\n[bold]Patch[/bold]")
         console.print(f"  {patch_path}")
@@ -2223,16 +2279,29 @@ def apply(
         if preview_truncated:
             console.print(f"\n[yellow]Preview truncated. Full patch available at {patch_path}[/yellow]")
 
-        if not yes and not typer.confirm("Apply this patch?", default=False):
-            console.print("[yellow]Cancelled.[/yellow]")
-            _record_timeline_event(
-                session,
-                "apply_cancelled",
-                "trevvos apply",
-                "cancelled",
-                reason="user_cancelled",
-            )
-            return
+        if not yes:
+            if high_risk or coverage_failed:
+                confirmation = typer.prompt("Type 'apply' to confirm", default="")
+                if confirmation != "apply":
+                    console.print("[yellow]Cancelled.[/yellow]")
+                    _record_timeline_event(
+                        session,
+                        "apply_cancelled",
+                        "trevvos apply",
+                        "cancelled",
+                        reason="strong_confirmation_required",
+                    )
+                    return
+            elif not typer.confirm("Apply this patch?", default=False):
+                console.print("[yellow]Cancelled.[/yellow]")
+                _record_timeline_event(
+                    session,
+                    "apply_cancelled",
+                    "trevvos apply",
+                    "cancelled",
+                    reason="user_cancelled",
+                )
+                return
 
         result = apply_patch(workspace_root=workspace_root, session=session)
 

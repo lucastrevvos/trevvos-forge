@@ -8,6 +8,7 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from trevvos_forge.cli import app
+from trevvos_forge.sessions import create_session, update_session_status, write_patch_file, write_session_json
 from trevvos_forge.timeline import read_timeline
 
 
@@ -139,6 +140,58 @@ class WorkCommandTests(unittest.TestCase):
             self.assertFalse((session_dir / "diff.patch").exists())
             self.assertNotIn("diff", [step["step"] for step in metadata["steps"]])
 
+    def test_work_blocks_when_verification_coverage_failed(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            provider = _QueueProvider(
+                [
+                    _plan_response_with_uncovered_cli_command(),
+                ]
+            )
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(
+                    app,
+                    ["work", "Add sqrt CLI", "--path", str(root), "--max-plan-retries", "0"],
+                )
+
+            self.assertEqual(result.exit_code, 1)
+            session_dir = _only_session(root)
+            metadata = _read_json(session_dir / "work_metadata.json")
+            coverage = _read_json(session_dir / "verification_coverage.json")
+
+            self.assertEqual(metadata["status"], "blocked")
+            self.assertEqual(metadata["reason"], "verification_coverage_failed")
+            self.assertEqual(coverage["status"], "failed")
+            self.assertFalse((session_dir / "diff.patch").exists())
+
+    def test_work_blocks_with_small_file_structural_warning(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "main.py").write_text("def main():\n    pass\n\nif __name__ == \"__main__\":\n    main()\n", encoding="utf-8")
+            provider = _QueueProvider(
+                [
+                    _plan_response(files_to_modify=["main.py"]),
+                    _risky_small_file_response(),
+                ]
+            )
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(app, ["work", "Update CLI", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 1)
+            session_dir = _only_session(root)
+            metadata = _read_json(session_dir / "work_metadata.json")
+            diff_warnings = _read_json(session_dir / "diff_warnings.json")
+
+            self.assertEqual(metadata["status"], "blocked")
+            self.assertEqual(metadata["reason"], "Work blocked by structural edit warning.")
+            self.assertTrue(any("Small file structural edit risk" in warning for warning in diff_warnings["warnings"]))
+
     def test_sandbox_failure_then_repair_success(self) -> None:
         runner = CliRunner()
 
@@ -265,6 +318,53 @@ class WorkCommandTests(unittest.TestCase):
             self.assertEqual(metadata["status"], "ready_to_apply")
             self.assertNotIn("Unknown operation", result.output)
 
+    def test_apply_high_risk_warning_requires_literal_apply(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "main.py").write_text("print('old')\n", encoding="utf-8")
+            session = create_session(root, "Update CLI", command="plan")
+            session = update_session_status(session, "diff_validated")
+            write_patch_file(
+                session.path / "diff.patch",
+                (
+                    "diff --git a/main.py b/main.py\n"
+                    "--- a/main.py\n"
+                    "+++ b/main.py\n"
+                    "@@ -1 +1 @@\n"
+                    "-print('old')\n"
+                    "+print('new')\n"
+                ),
+            )
+            write_session_json(
+                session,
+                "file_changes.json",
+                {"changes": [{"path": "main.py", "change_type": "modified", "mode": "full_file_rewrite"}]},
+            )
+            write_session_json(
+                session,
+                "diff_validation.json",
+                {
+                    "status": "passed",
+                    "changes": [{"path": "main.py", "change_type": "modified", "mode": "full_file_rewrite"}],
+                    "warnings": [],
+                },
+            )
+            write_session_json(
+                session,
+                "diff_warnings.json",
+                {"warnings": ["Small file structural edit risk: main.py received fragile local edits."]},
+            )
+
+            cancelled = runner.invoke(app, ["apply", "--path", str(root)], input="y\n")
+            applied = runner.invoke(app, ["apply", "--path", str(root)], input="apply\n")
+
+            self.assertEqual(cancelled.exit_code, 0, cancelled.output)
+            self.assertIn("Type 'apply' to confirm", cancelled.output)
+            self.assertEqual(applied.exit_code, 0, applied.output)
+            self.assertEqual((root / "main.py").read_text(encoding="utf-8"), "print('new')\n")
+
     def test_work_help(self) -> None:
         runner = CliRunner()
 
@@ -338,6 +438,37 @@ def _missing_target_response() -> str:
                     "target": "missing line",
                     "insert": "print('ok')\\n",
                 }
+            ]
+        }
+    )
+
+
+def _plan_response_with_uncovered_cli_command() -> str:
+    payload = json.loads(_plan_response(files_to_modify=["main.py"]))
+    payload["expected_behavior"] = ["python main.py sqrt 9 prints 3.0"]
+    payload["suggested_verification_commands"] = ["python -m py_compile calculator.py main.py"]
+    return json.dumps(payload)
+
+
+def _risky_small_file_response() -> str:
+    return json.dumps(
+        {
+            "changes": [
+                {
+                    "path": "main.py",
+                    "change_type": "modified",
+                    "mode": "operation_based_edit",
+                    "operation": "insert_after_line",
+                    "target": "def main():",
+                    "insert": "    print('ok')\n",
+                },
+                {
+                    "path": "main.py",
+                    "change_type": "modified",
+                    "mode": "operation_based_edit",
+                    "operation": "append_to_file",
+                    "insert": "\n# appended\n",
+                },
             ]
         }
     )

@@ -1,5 +1,6 @@
 import ast
 import json
+import subprocess
 from pathlib import Path
 from typing import Annotated
 
@@ -14,6 +15,7 @@ from trevvos_forge.commit_workflow import (
     CommitResult,
     build_commit_plan,
     build_deterministic_commit_message,
+    extract_patch_paths,
     parse_commit_message_response,
     render_commit_message,
     run_git_commit,
@@ -515,6 +517,216 @@ def _build_explanation_context(
         ]
     ).strip()
     return context, files_explained
+
+
+def _build_handoff_context(
+    *,
+    repo_root: Path,
+    request: str,
+    target_ai: str,
+    include_code: bool,
+    profile: dict,
+    max_files: int = 8,
+    max_chars_per_file: int = 12_000,
+) -> tuple[str, list[str]]:
+    selected_paths = _select_analysis_files(
+        repo_root=repo_root,
+        target=None,
+        profile=profile,
+        max_files=max_files,
+    )
+    file_sections: list[str] = []
+
+    if include_code:
+        for relative_path in selected_paths:
+            content = read_workspace_file(
+                root=repo_root,
+                file_path=Path(relative_path),
+                max_chars=max_chars_per_file,
+            )
+            file_sections.append(
+                "\n".join(
+                    [
+                        f"## File: {relative_path}",
+                        "",
+                        "Content with line numbers:",
+                        "",
+                        "```text",
+                        content_with_line_numbers(content),
+                        "```",
+                    ]
+                )
+            )
+    else:
+        file_sections.append("Source code snippets were intentionally omitted by --no-code.")
+
+    target_guidance = _handoff_target_guidance(target_ai)
+    files_text = "\n\n".join(file_sections) if file_sections else "No file contents selected."
+    context = "\n\n".join(
+        [
+            "# AI Handoff Context",
+            "",
+            "User request:",
+            request,
+            "",
+            f"Target AI: {target_ai}",
+            "",
+            target_guidance,
+            "",
+            build_project_profile_prompt_section(profile),
+            "",
+            "# Relevant files and snippets",
+            "",
+            files_text,
+            "",
+            "# Safety requirements",
+            "",
+            "- Preserve existing behavior unless explicitly requested otherwise.",
+            "- Preserve existing public functions, classes, and CLI commands.",
+            "- For additive changes, add new behavior instead of replacing old behavior.",
+            "- If modifying a CLI, keep existing commands working.",
+            "- Keep changes minimal and scoped to the user request.",
+            "- Run verification commands before declaring success.",
+            "- Do not claim tests were run unless they were actually run.",
+        ]
+    )
+    return context, selected_paths
+
+
+def _handoff_target_guidance(target_ai: str) -> str:
+    normalized = target_ai.lower().strip()
+    if normalized == "codex":
+        return "\n".join(
+            [
+                "Target-specific guidance:",
+                "- Ask Codex to inspect the relevant files before editing.",
+                "- Do not commit automatically.",
+                "- Avoid changes outside the requested scope.",
+                "- Run the verification commands and summarize results.",
+            ]
+        )
+    if normalized == "cursor":
+        return "\n".join(
+            [
+                "Target-specific guidance:",
+                "- Use this as a Cursor Agent/Composer implementation brief.",
+                "- Keep edits scoped and preserve existing behavior.",
+                "- Run or request the listed verification commands before finishing.",
+            ]
+        )
+    if normalized == "claude":
+        return "\n".join(
+            [
+                "Target-specific guidance:",
+                "- Ask Claude to reason about the plan before editing.",
+                "- Prefer small, safe edits and stop if project context is missing.",
+                "- Verify existing behavior and the requested new behavior.",
+            ]
+        )
+    return "\n".join(
+        [
+            "Target-specific guidance:",
+            "- Generate a generic copy-paste prompt for an external coding AI.",
+            "- Keep the prompt tool-agnostic and implementation-focused.",
+        ]
+    )
+
+
+def _build_diff_review_context(
+    *,
+    profile: dict,
+    git_status: str,
+    diff_stat: str,
+    diff_text: str,
+    staged: bool,
+    max_diff_chars: int = 60_000,
+) -> tuple[str, list[str]]:
+    files_changed = extract_patch_paths(diff_text)
+    diff_body = diff_text
+    truncated = False
+
+    if len(diff_body) > max_diff_chars:
+        diff_body = diff_body[:max_diff_chars] + "\n\n[diff truncated]"
+        truncated = True
+
+    context = "\n\n".join(
+        [
+            "# Advisory Diff Review Context",
+            "",
+            f"Mode: {'staged' if staged else 'working tree'}",
+            "",
+            build_project_profile_prompt_section(profile),
+            "",
+            "# Git status",
+            "",
+            "```text",
+            git_status.strip() or "<clean>",
+            "```",
+            "",
+            "# Diff stat",
+            "",
+            "```text",
+            diff_stat.strip() or "<none>",
+            "```",
+            "",
+            "# Files changed",
+            "",
+            "\n".join(f"- {path}" for path in files_changed) if files_changed else "<none>",
+            "",
+            "# Diff",
+            "",
+            "```diff",
+            diff_body,
+            "```",
+            "",
+            f"Diff truncated: {str(truncated).lower()}",
+            "",
+            "# Available test artifacts",
+            "",
+            "No test artifacts were provided in this advisory review context.",
+        ]
+    )
+    return context, files_changed
+
+
+def _run_git_capture(repo_root: Path, args: list[str]) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+            text=True,
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        raise DiffError(f"git command failed to start: {exc}") from exc
+
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise DiffError(f"git {' '.join(args)} failed: {detail}")
+
+    return result.stdout
+
+
+def _extract_final_recommendation(markdown: str) -> str | None:
+    allowed = {"approve", "approve_with_comments", "request_changes", "needs_more_context"}
+    lines = markdown.splitlines()
+
+    for index, line in enumerate(lines):
+        if line.strip().lower() == "## final recommendation":
+            for candidate in lines[index + 1 : index + 8]:
+                value = candidate.strip().strip("`").lower()
+                if value in allowed:
+                    return value
+                if value.startswith("- "):
+                    bullet = value[2:].strip().strip("`")
+                    if bullet in allowed:
+                        return bullet
+    for value in allowed:
+        if value in markdown:
+            return value
+    return None
 
 
 def _validate_explain_target(*, repo_root: Path, target: Path) -> str:
@@ -1176,6 +1388,175 @@ def explain(
                 "failed",
                 message=str(exc),
                 artifacts=["explanation_metadata.json"],
+            )
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def spec(
+    request: Annotated[
+        str,
+        typer.Argument(help="Implementation request to turn into an AI handoff spec."),
+    ],
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+    target_ai: Annotated[
+        str,
+        typer.Option("--target", help="External AI target: generic, codex, cursor, or claude."),
+    ] = "generic",
+    include_code: Annotated[
+        bool,
+        typer.Option("--include-code/--no-code", help="Include selected source snippets in the handoff context."),
+    ] = True,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print handoff metadata as JSON."),
+    ] = False,
+    max_files: Annotated[
+        int,
+        typer.Option("--max-files", help="Maximum number of files to include."),
+    ] = 8,
+    max_chars: Annotated[
+        int,
+        typer.Option("--max-chars", help="Maximum characters per file."),
+    ] = 12_000,
+) -> None:
+    """
+    Generate an AI handoff implementation spec without modifying files.
+    """
+    session = None
+    try:
+        if not request.strip():
+            raise DiffError("Spec request cannot be empty.")
+
+        target_ai = target_ai.lower().strip() or "generic"
+        if target_ai not in {"generic", "codex", "cursor", "claude"}:
+            raise DiffError("Unsupported spec target. Use one of: generic, codex, cursor, claude.")
+
+        workspace_root = path.resolve()
+        settings = load_settings()
+        profile = scan_project(workspace_root)
+        save_project_profile(workspace_root, profile)
+        handoff_context, files_included = _build_handoff_context(
+            repo_root=workspace_root,
+            request=request,
+            target_ai=target_ai,
+            include_code=include_code,
+            profile=profile,
+            max_files=max_files,
+            max_chars_per_file=max_chars,
+        )
+        provider = build_provider(settings)
+
+        session = create_session(
+            root=workspace_root,
+            user_request=request,
+            command="spec",
+        )
+        _record_timeline_event(session, "spec_started", "trevvos spec", "started")
+
+        prompt_template = get_prompt("implementation_handoff_spec")
+        prompt = prompt_template.render(handoff_context=handoff_context)
+
+        write_session_text(session=session, file_name="context.md", content=handoff_context)
+        write_session_json(
+            session,
+            "selected_files.json",
+            {
+                "mode": "advisory",
+                "command": "spec",
+                "target": target_ai,
+                "include_code": include_code,
+                "files_included": files_included,
+            },
+        )
+        write_session_json(session, "project_profile.json", profile)
+
+        with console.status("[bold]Generating implementation handoff spec...[/bold]", spinner="dots"):
+            raw_response = provider.generate(prompt)
+
+        write_session_text(session=session, file_name="handoff_spec.md", content=raw_response)
+        write_session_text(session=session, file_name="external_ai_prompt.md", content=raw_response)
+
+        metadata = {
+            "mode": "advisory",
+            "command": "spec",
+            "target": target_ai,
+            "request": request,
+            "prompt": prompt_template.ref,
+            "model": settings.model,
+            "files_included": files_included,
+            "status": "succeeded",
+            "artifacts": {
+                "handoff_spec": "handoff_spec.md",
+                "external_ai_prompt": "external_ai_prompt.md",
+                "metadata": "handoff_metadata.json",
+                "project_profile": "project_profile.json",
+                "selected_files": "selected_files.json",
+                "context": "context.md",
+            },
+        }
+        write_session_text(session=session, file_name="handoff_prompt.md", content=prompt)
+        write_session_json(session, "handoff_metadata.json", metadata)
+        session = update_session_status(session, "spec_completed")
+        _record_timeline_event(
+            session,
+            "spec_completed",
+            "trevvos spec",
+            "succeeded",
+            artifacts=[
+                "handoff_spec.md",
+                "external_ai_prompt.md",
+                "handoff_metadata.json",
+                "project_profile.json",
+                "selected_files.json",
+                "context.md",
+            ],
+        )
+
+        if json_output:
+            console.print(json.dumps(metadata, indent=2, ensure_ascii=False))
+            return
+
+        console.print("[green]Implementation handoff spec generated.[/green]\n")
+        console.print(f"Session:        [bold]{session.metadata.id}[/bold]")
+        console.print("Mode:           advisory")
+        console.print(f"Target AI:      {target_ai}")
+        console.print(f"Files included: {len(files_included)}")
+        console.print(f"Prompt:         {prompt_template.ref}")
+        console.print(f"Model:          {settings.model}")
+        console.print("\n[bold]Saved files[/bold]")
+        console.print(f"  - {session.path / 'handoff_spec.md'}")
+        console.print(f"  - {session.path / 'external_ai_prompt.md'}")
+        console.print(f"  - {session.path / 'handoff_metadata.json'}")
+        console.print(f"  - {session.path / 'project_profile.json'}")
+        console.print("\n[bold]Next[/bold]")
+        console.print(f"  Copy {session.path / 'external_ai_prompt.md'} into your preferred coding AI.")
+
+    except ForgeError as exc:
+        if session is not None:
+            write_session_json(
+                session,
+                "handoff_metadata.json",
+                {
+                    "mode": "advisory",
+                    "command": "spec",
+                    "target": target_ai,
+                    "request": request,
+                    "status": "failed",
+                    "error": str(exc),
+                },
+            )
+            _record_timeline_event(
+                session,
+                "spec_failed",
+                "trevvos spec",
+                "failed",
+                message=str(exc),
+                artifacts=["handoff_metadata.json"],
             )
         print_error(str(exc))
         raise typer.Exit(code=1)

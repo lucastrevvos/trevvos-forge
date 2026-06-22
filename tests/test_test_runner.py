@@ -14,6 +14,7 @@ from trevvos_forge.test_runner import (
     run_tests_in_sandbox,
     write_test_artifacts,
 )
+from trevvos_forge.sessions import write_patch_file
 
 
 def _python_command(code: str) -> str:
@@ -157,7 +158,7 @@ class TestRunnerTests(unittest.TestCase):
             root.mkdir()
             (root / "README.md").write_text("# Old\n", encoding="utf-8")
             patch_path = Path(temporary_directory) / "diff.patch"
-            patch_path.write_text(_readme_patch("# Old", "# New"), encoding="utf-8", newline="\n")
+            write_patch_file(patch_path, _readme_patch("# Old", "# New"))
             sandbox = create_project_sandbox(root)
 
             try:
@@ -175,7 +176,7 @@ class TestRunnerTests(unittest.TestCase):
             root.mkdir()
             (root / "README.md").write_text("# Old\n", encoding="utf-8")
             patch_path = Path(temporary_directory) / "diff.patch"
-            patch_path.write_text("not a patch\n", encoding="utf-8", newline="\n")
+            write_patch_file(patch_path, "not a patch\n")
 
             result = run_tests_in_sandbox(
                 repo_root=root,
@@ -195,7 +196,7 @@ class TestRunnerTests(unittest.TestCase):
             root.mkdir()
             (root / "README.md").write_text("# Old\n", encoding="utf-8")
             patch_path = Path(temporary_directory) / "diff.patch"
-            patch_path.write_text(_readme_patch("# Old", "# New"), encoding="utf-8", newline="\n")
+            write_patch_file(patch_path, _readme_patch("# Old", "# New"))
 
             result = run_tests_in_sandbox(
                 repo_root=root,
@@ -218,7 +219,7 @@ class TestRunnerTests(unittest.TestCase):
             root.mkdir()
             (root / "README.md").write_text("# Old\n", encoding="utf-8")
             patch_path = Path(temporary_directory) / "diff.patch"
-            patch_path.write_text(_readme_patch("# Old", "# New"), encoding="utf-8", newline="\n")
+            write_patch_file(patch_path, _readme_patch("# Old", "# New"))
 
             result = run_tests_in_sandbox(
                 repo_root=root,
@@ -236,7 +237,7 @@ class TestRunnerTests(unittest.TestCase):
             root.mkdir()
             (root / "README.md").write_text("# Old\n", encoding="utf-8")
             patch_path = Path(temporary_directory) / "diff.patch"
-            patch_path.write_text(_readme_patch("# Old", "# New"), encoding="utf-8", newline="\n")
+            write_patch_file(patch_path, _readme_patch("# Old", "# New"))
 
             result = run_tests_in_sandbox(
                 repo_root=root,
@@ -260,7 +261,7 @@ class TestRunnerTests(unittest.TestCase):
             session_dir = Path(temporary_directory) / "session"
             (root / "README.md").write_text("# Old\n", encoding="utf-8")
             patch_path = Path(temporary_directory) / "diff.patch"
-            patch_path.write_text(_readme_patch("# Old", "# New"), encoding="utf-8", newline="\n")
+            write_patch_file(patch_path, _readme_patch("# Old", "# New"))
             result = run_tests_in_sandbox(
                 repo_root=root,
                 patch_path=patch_path,

@@ -8,6 +8,7 @@ from trevvos_forge.status_workflow import (
     render_status_text,
     write_session_status,
 )
+from trevvos_forge.sessions import write_patch_file
 
 
 class StatusWorkflowTests(unittest.TestCase):
@@ -164,7 +165,7 @@ def _write_metadata(session_dir: Path, status: str = "planned") -> None:
 def _write_validated_diff(session_dir: Path, metadata_status: str = "diff_validated") -> None:
     _write_metadata(session_dir, status=metadata_status)
     (session_dir / "plan.md").write_text("Plan.", encoding="utf-8")
-    (session_dir / "diff.patch").write_text("diff --git a/README.md b/README.md\n", encoding="utf-8")
+    write_patch_file(session_dir / "diff.patch", "diff --git a/README.md b/README.md\n")
     (session_dir / "change_summary.md").write_text("# Change Summary\n", encoding="utf-8")
     (session_dir / "diff_validation.json").write_text(
         json.dumps({"is_valid": True, "changes": [], "warnings": []}),

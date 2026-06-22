@@ -9,6 +9,7 @@ from trevvos_forge.review_workflow import (
     render_llm_review_markdown,
     write_llm_review_artifacts,
 )
+from trevvos_forge.sessions import write_patch_file
 
 
 class ReviewWorkflowTests(unittest.TestCase):
@@ -16,9 +17,9 @@ class ReviewWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             session_dir = Path(temporary_directory)
             _write_review_fixture(session_dir)
-            (session_dir / "diff.patch").write_text(
+            write_patch_file(
+                session_dir / "diff.patch",
                 "\n".join(f"line {index}" for index in range(10)),
-                encoding="utf-8",
             )
             (session_dir / "test_output.log").write_text(
                 "\n".join(f"log {index}" for index in range(10)),
@@ -45,7 +46,7 @@ class ReviewWorkflowTests(unittest.TestCase):
     def test_build_review_context_without_test_results(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             session_dir = Path(temporary_directory)
-            (session_dir / "diff.patch").write_text("diff --git a/a b/a\n", encoding="utf-8")
+            write_patch_file(session_dir / "diff.patch", "diff --git a/a b/a\n")
 
             context = build_review_context(session_dir)
 

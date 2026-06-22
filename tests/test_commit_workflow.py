@@ -15,6 +15,7 @@ from trevvos_forge.commit_workflow import (
     write_commit_artifacts,
 )
 from trevvos_forge.exceptions import CommitError
+from trevvos_forge.sessions import write_patch_file
 
 
 class CommitWorkflowTests(unittest.TestCase):
@@ -175,10 +176,9 @@ def _create_session(root: Path, patch_paths: list[str]) -> Path:
         json.dumps({"id": "test-session"}),
         encoding="utf-8",
     )
-    (session_dir / "diff.patch").write_text(
+    write_patch_file(
+        session_dir / "diff.patch",
         "".join(_patch_for_path(path) for path in patch_paths),
-        encoding="utf-8",
-        newline="\n",
     )
     (session_dir / "change_summary.md").write_text(
         "# Change Summary\n\n## Patch Summary\n\n- Updated README.\n",

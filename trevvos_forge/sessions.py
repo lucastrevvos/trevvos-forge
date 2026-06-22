@@ -145,8 +145,18 @@ def read_session_text(session: ForgeSession, file_name: str) -> str:
     return file_path.read_text(encoding="utf-8")
 
 
+def write_patch_file(path: Path, patch_text: str) -> None:
+    normalized = patch_text.replace("\r\n", "\n").replace("\r", "\n")
+    with path.open("w", encoding="utf-8", newline="\n") as file:
+        file.write(normalized)
+
+
 def write_session_text(session: ForgeSession, file_name: str, content: str) -> None:
-    _write_text(session.path / file_name, content)
+    if file_name.endswith(".patch"):
+        write_patch_file(session.path / file_name, content)
+    else:
+        _write_text(session.path / file_name, content)
+
 
 def write_session_json(session: ForgeSession, file_name: str, data: dict) -> None:
     _write_json(session.path / file_name, data)

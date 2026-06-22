@@ -7,6 +7,7 @@ from trevvos_forge.diff_builder import build_unified_diff_from_file_changes
 from trevvos_forge.exceptions import DiffError
 from trevvos_forge.file_change_outputs import FileChange, FileChangesOutput
 from trevvos_forge.operation_applier import apply_operation_change
+from trevvos_forge.sessions import write_patch_file
 
 
 class OperationApplierTests(unittest.TestCase):
@@ -172,7 +173,7 @@ class OperationApplierTests(unittest.TestCase):
                 ),
             )
             patch_path = root / "diff.patch"
-            patch_path.write_text(patch, encoding="utf-8")
+            write_patch_file(patch_path, patch)
 
             result = subprocess.run(
                 ["git", "apply", "--check", str(patch_path)],

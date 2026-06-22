@@ -6,6 +6,7 @@ from pathlib import Path
 
 from trevvos_forge.diff_builder import build_unified_diff_from_file_changes
 from trevvos_forge.file_change_outputs import parse_file_changes_output
+from trevvos_forge.sessions import write_patch_file
 
 
 FIXTURES_ROOT = Path(__file__).parent / "fixtures" / "evals"
@@ -52,7 +53,7 @@ class GoldenEvalTests(unittest.TestCase):
                 file_changes=file_changes,
             )
             patch_path = workspace_root / "diff.patch"
-            patch_path.write_text(patch_text, encoding="utf-8", newline="\n")
+            write_patch_file(patch_path, patch_text)
 
             self._run_git_apply(workspace_root, patch_path, "--check")
             self._run_git_apply(workspace_root, patch_path)

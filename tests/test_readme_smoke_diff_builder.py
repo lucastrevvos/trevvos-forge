@@ -5,6 +5,7 @@ from pathlib import Path
 
 from trevvos_forge.diff_builder import build_unified_diff_from_file_changes
 from trevvos_forge.file_change_outputs import FileChange, FileChangesOutput
+from trevvos_forge.sessions import write_patch_file
 
 
 class ReadmeSmokeDiffBuilderTests(unittest.TestCase):
@@ -39,7 +40,12 @@ class ReadmeSmokeDiffBuilderTests(unittest.TestCase):
             )
 
             patch_path = root / "diff.patch"
-            patch_path.write_text(patch, encoding="utf-8")
+            write_patch_file(patch_path, patch)
+
+            patch_bytes = patch_path.read_bytes()
+            self.assertNotIn(b"\r\n", patch_bytes)
+            self.assertNotIn(b"\r", patch_bytes)
+            self.assertIn(b"\n", patch_bytes)
 
             check_result = subprocess.run(
                 ["git", "apply", "--check", str(patch_path)],

@@ -120,6 +120,11 @@ from trevvos_forge.test_runner import (
     run_test_specs_in_sandbox,
     write_test_artifacts,
 )
+from trevvos_forge.test_generation_workflow import (
+    TestAddRequest,
+    render_test_add_result,
+    run_tests_add_workflow,
+)
 from trevvos_forge.test_generation import (
     build_selected_files_payload,
     build_existing_tests_check,
@@ -4558,6 +4563,32 @@ def tests_add(
             raise DiffError("Choose only one test type: --unit or --e2e.")
         if max_structure_retries < 0 or max_structure_retries > 3:
             raise DiffError("--max-structure-retries must be between 0 and 3.")
+
+        workspace_root = path.resolve()
+        request = TestAddRequest(
+            repo_root=workspace_root,
+            source_path=str(source_path),
+            symbol=symbol,
+            all_symbols=all_symbols,
+            test_file=str(test_file) if test_file is not None else None,
+            unit=unit,
+            e2e=e2e,
+            write=write,
+            yes=yes,
+            force=force,
+            keep_sandbox=keep_sandbox,
+            max_structure_retries=max_structure_retries,
+            timeout=timeout,
+        )
+
+        provider_factory = lambda: build_provider(load_settings())
+        with console.status("[bold]Generating test file changes with your local LLM...[/bold]", spinner="dots"):
+            result = run_tests_add_workflow(request, provider_factory=provider_factory)
+
+        render_test_add_result(result=result, json_output=json_output, console=console)
+        if result.exit_code != 0:
+            raise typer.Exit(code=result.exit_code)
+        return
 
         workspace_root = path.resolve()
         target = build_test_generation_target(

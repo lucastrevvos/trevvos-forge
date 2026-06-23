@@ -846,13 +846,15 @@ class TestsAddCommandTests(unittest.TestCase):
                 result = runner.invoke(app, ["tests", "add", "calculator.py", "--all", "--path", str(root)])
 
             self.assertEqual(result.exit_code, 1)
-            self.assertIn("Generated test file failed structural validation", result.output)
+            self.assertIn("Generated tests still failed structural validation after retry.", result.output)
             self.assertEqual((root / "calculator.py").read_text(encoding="utf-8"), original_source)
             self.assertFalse((root / "tests" / "test_calculator.py").exists())
             session_dir = _only_session(root)
+            repair = _read_json(session_dir / "test_import_repair.json")
             structure = _read_json(session_dir / "test_structure_validation.json")
             metadata = _read_json(session_dir / "test_generation_metadata.json")
 
+            self.assertEqual(repair["status"], "not_repairable")
             self.assertEqual(structure["status"], "failed")
             self.assertTrue(any("Top-level pytest-style test function" in error for error in structure["errors"]))
             self.assertTrue(any("Nested test function" in error for error in structure["errors"]))
@@ -876,9 +878,250 @@ class TestsAddCommandTests(unittest.TestCase):
                 )
 
             self.assertEqual(result.exit_code, 1)
-            self.assertIn("Generated test file failed structural validation", result.output)
+            self.assertIn("Generated tests still failed structural validation after retry.", result.output)
             self.assertFalse((root / "tests" / "test_calculator.py").exists())
             self.assertFalse((_only_session(root) / "test_apply_result.json").exists())
+
+    def test_import_repair_recovers_missing_imports_before_sandbox(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo_with_sqrt(Path(temporary_directory))
+            tests_dir = root / "tests"
+            tests_dir.mkdir()
+            original_test_content = (
+                "import unittest\n"
+                "from calculator import divide\n\n"
+                "class TestCalculator(unittest.TestCase):\n"
+                "    def test_divide_by_zero_raises_value_error(self):\n"
+                "        with self.assertRaises(ValueError):\n"
+                "            divide(10, 0)\n"
+            )
+            (tests_dir / "test_calculator.py").write_text(
+                original_test_content,
+                encoding="utf-8",
+            )
+            provider = _FakeProvider(_create_missing_imports_repairable_response())
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(app, ["tests", "add", "calculator.py", "--all", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            session_dir = _only_session(root)
+            repair = _read_json(session_dir / "test_import_repair.json")
+            structure = _read_json(session_dir / "test_structure_validation.json")
+            patch_text = (session_dir / "test_diff.patch").read_text(encoding="utf-8")
+            metadata = _read_json(session_dir / "test_generation_metadata.json")
+            summary = (session_dir / "test_generation_summary.md").read_text(encoding="utf-8")
+
+            self.assertEqual(repair["status"], "repaired")
+            self.assertEqual(repair["symbols_added"], ["add", "multiply", "sqrt", "subtract"])
+            self.assertEqual(structure["status"], "passed")
+            self.assertIn("from calculator import add, divide, multiply, sqrt, subtract", patch_text)
+            self.assertEqual(metadata["test_import_repair"]["status"], "repaired")
+            self.assertEqual(
+                metadata["test_import_repair"]["symbols_added"],
+                ["add", "multiply", "sqrt", "subtract"],
+            )
+            self.assertIn("## Test import repair", summary)
+            self.assertIn("Status: repaired", summary)
+            self.assertIn("add", summary)
+            self.assertEqual((tests_dir / "test_calculator.py").read_text(encoding="utf-8"), original_test_content)
+
+    def test_import_repair_write_applies_after_sandbox(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo_with_sqrt(Path(temporary_directory))
+            tests_dir = root / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_calculator.py").write_text(
+                "import unittest\n"
+                "from calculator import divide\n\n"
+                "class TestCalculator(unittest.TestCase):\n"
+                "    def test_divide_by_zero_raises_value_error(self):\n"
+                "        with self.assertRaises(ValueError):\n"
+                "            divide(10, 0)\n",
+                encoding="utf-8",
+            )
+            provider = _FakeProvider(_create_missing_imports_repairable_response())
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(
+                    app,
+                    ["tests", "add", "calculator.py", "--all", "--write", "--yes", "--path", str(root)],
+                )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            test_file = root / "tests" / "test_calculator.py"
+            content = test_file.read_text(encoding="utf-8")
+
+            self.assertIn("from calculator import add, divide, multiply, sqrt, subtract", content)
+            self.assertTrue((_only_session(root) / "test_apply_result.json").exists())
+
+    def test_structure_retry_recovers_on_second_provider_response(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo_with_sqrt(Path(temporary_directory))
+            provider = _FakeProvider([_create_structure_retry_bad_response(), _create_structure_retry_good_response()])
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(
+                    app,
+                    ["tests", "add", "calculator.py", "--all", "--max-structure-retries", "1", "--path", str(root)],
+                )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertEqual(provider.call_count, 2)
+            self.assertIn("You are retrying because the previous generated tests failed structural validation.", provider.prompts[1])
+            self.assertIn("Top-level pytest-style test function", provider.prompts[1])
+            self.assertIn("Nested test function", provider.prompts[1])
+            session_dir = _only_session(root)
+            metadata = _read_json(session_dir / "test_generation_metadata.json")
+            summary = (session_dir / "test_generation_summary.md").read_text(encoding="utf-8")
+
+            self.assertEqual(metadata["structure_retries"]["max"], 1)
+            self.assertEqual(metadata["structure_retries"]["used"], 1)
+            self.assertEqual(metadata["structure_retries"]["status"], "succeeded_after_retry")
+            self.assertEqual(metadata["status"], "diff_ready")
+            self.assertTrue((session_dir / "test_generation_retry_prompt.md").exists())
+            self.assertTrue((session_dir / "test_generation_retry_raw_response.json").exists())
+            self.assertTrue((session_dir / "test_generation_retry_metadata.json").exists())
+            self.assertIn("## Structure retry", summary)
+            self.assertIn("Result: succeeded_after_retry", summary)
+            self.assertTrue((session_dir / "test_diff.patch").exists())
+            self.assertTrue((session_dir / "test_sandbox_results.json").exists())
+
+    def test_structure_retry_zero_disables_retry(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider(_create_structure_retry_bad_response())
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(
+                    app,
+                    ["tests", "add", "calculator.py", "--all", "--max-structure-retries", "0", "--path", str(root)],
+                )
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertEqual(provider.call_count, 1)
+            session_dir = _only_session(root)
+            metadata = _read_json(session_dir / "test_generation_metadata.json")
+
+            self.assertEqual(metadata["status"], "failed_test_structure_validation")
+            self.assertEqual(metadata["structure_retries"]["max"], 0)
+            self.assertEqual(metadata["structure_retries"]["used"], 0)
+            self.assertEqual(metadata["structure_retries"]["status"], "not_needed")
+            self.assertFalse((session_dir / "test_generation_retry_prompt.md").exists())
+
+    def test_structure_retry_fails_after_exhausting_limit(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider([_create_structure_retry_bad_response(), _create_structure_retry_bad_response()])
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(
+                    app,
+                    ["tests", "add", "calculator.py", "--all", "--max-structure-retries", "1", "--path", str(root)],
+                )
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertEqual(provider.call_count, 2)
+            session_dir = _only_session(root)
+            metadata = _read_json(session_dir / "test_generation_metadata.json")
+
+            self.assertEqual(metadata["status"], "failed_test_structure_validation")
+            self.assertEqual(metadata["structure_retries"]["max"], 1)
+            self.assertEqual(metadata["structure_retries"]["used"], 1)
+            self.assertEqual(metadata["structure_retries"]["status"], "failed_after_retries")
+            self.assertFalse((session_dir / "test_diff.patch").exists())
+            self.assertFalse((session_dir / "test_sandbox_results.json").exists())
+
+    def test_structure_retry_does_not_run_for_guardrail_failure(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider(
+                json.dumps(
+                    {
+                        "changes": [
+                            {
+                                "path": "calculator.py",
+                                "change_type": "modified",
+                                "mode": "operation_based_edit",
+                                "operation": "append_to_file",
+                                "insert": "\n# bad\n",
+                            }
+                        ]
+                    }
+                )
+            )
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(
+                    app,
+                    ["tests", "add", "calculator.py", "--all", "--max-structure-retries", "1", "--path", str(root)],
+                )
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertEqual(provider.call_count, 1)
+            session_dir = _only_session(root)
+            self.assertFalse((session_dir / "test_generation_retry_prompt.md").exists())
+
+    def test_structure_retry_does_not_run_for_invalid_json(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider("this is not json")
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(
+                    app,
+                    ["tests", "add", "calculator.py", "--all", "--max-structure-retries", "1", "--path", str(root)],
+                )
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertEqual(provider.call_count, 1)
+            session_dir = _only_session(root)
+            self.assertFalse((session_dir / "test_generation_retry_prompt.md").exists())
+
+    def test_write_applies_after_retry_success(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo_with_sqrt(Path(temporary_directory))
+            provider = _FakeProvider([_create_structure_retry_bad_response(), _create_structure_retry_good_response()])
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(
+                    app,
+                    [
+                        "tests",
+                        "add",
+                        "calculator.py",
+                        "--all",
+                        "--max-structure-retries",
+                        "1",
+                        "--write",
+                        "--yes",
+                        "--path",
+                        str(root),
+                    ],
+                )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertEqual(provider.call_count, 2)
+            test_file = root / "tests" / "test_calculator.py"
+            content = test_file.read_text(encoding="utf-8")
+            self.assertIn("from calculator import add, divide, multiply, sqrt, subtract", content)
+            self.assertTrue((_only_session(root) / "test_apply_result.json").exists())
 
     def test_git_apply_check_and_artifacts_are_saved(self) -> None:
         runner = CliRunner()
@@ -1010,7 +1253,7 @@ class TestsAddCommandTests(unittest.TestCase):
 
             with (
                 patch("trevvos_forge.cli.build_provider", return_value=provider),
-                patch("trevvos_forge.cli.run_test_specs_in_sandbox", side_effect=fake_sandbox),
+                patch("trevvos_forge.test_generation_workflow.run_test_specs_in_sandbox", side_effect=fake_sandbox),
             ):
                 result = runner.invoke(app, ["tests", "add", "calculator.py", "--symbol", "divide", "--path", str(root)])
 
@@ -1139,6 +1382,7 @@ class TestsAddCommandTests(unittest.TestCase):
         self.assertIn("--all", result.output)
         self.assertIn("--write", result.output)
         self.assertIn("--force", result.output)
+        self.assertIn("--max-structure-retries", result.output)
         self.assertIn("--keep-sandbox", result.output)
 
     def test_json_output(self) -> None:
@@ -1199,6 +1443,21 @@ def _sample_repo(root: Path) -> Path:
     return root
 
 
+def _sample_repo_with_sqrt(root: Path) -> Path:
+    root = _sample_repo(root)
+    calculator = (root / "calculator.py").read_text(encoding="utf-8")
+    (root / "calculator.py").write_text(
+        calculator
+        + "\n"
+        + "def sqrt(value):\n"
+        + "    if value < 0:\n"
+        + "        raise ValueError('negative value')\n"
+        + "    return value ** 0.5\n",
+        encoding="utf-8",
+    )
+    return root
+
+
 def _create_test_file_response() -> str:
     return json.dumps(
         {
@@ -1212,6 +1471,88 @@ def _create_test_file_response() -> str:
                         "import unittest\n\n"
                         "from calculator import divide\n\n\n"
                         "class TestCalculator(unittest.TestCase):\n"
+                        "    def test_divide_by_zero_raises_value_error(self):\n"
+                        "        with self.assertRaises(ValueError):\n"
+                        "            divide(10, 0)\n"
+                    ),
+                }
+            ]
+        }
+    )
+
+
+def _create_missing_imports_repairable_response() -> str:
+    return json.dumps(
+        {
+            "changes": [
+                {
+                    "path": "tests/test_calculator.py",
+                    "change_type": "modified",
+                    "mode": "operation_based_edit",
+                    "operation": "append_to_file",
+                    "insert": (
+                        "\n\n    def test_addition(self):\n"
+                        "        self.assertEqual(add(2, 3), 5)\n\n"
+                        "    def test_subtraction(self):\n"
+                        "        self.assertEqual(subtract(5, 2), 3)\n\n"
+                        "    def test_multiplication(self):\n"
+                        "        self.assertEqual(multiply(4, 3), 12)\n\n"
+                        "    def test_sqrt_positive(self):\n"
+                        "        self.assertAlmostEqual(sqrt(4), 2.0)\n"
+                    ),
+                }
+            ]
+        }
+    )
+
+
+def _create_structure_retry_bad_response() -> str:
+    return json.dumps(
+        {
+            "changes": [
+                {
+                    "path": "tests/test_calculator.py",
+                    "change_type": "created",
+                    "mode": "operation_based_edit",
+                    "operation": "create_file",
+                    "content": (
+                        "import unittest\n"
+                        "from calculator import divide\n\n"
+                        "class TestCalculator(unittest.TestCase):\n"
+                        "    def test_divide_by_zero(self):\n"
+                        "        divide(1, 1)\n\n"
+                        "def test_add_positive_numbers():\n"
+                        "    self.assertEqual(add(1, 2), 3)\n\n"
+                        "    def test_nested_case():\n"
+                        "        self.assertEqual(add(1, 2), 3)\n"
+                    ),
+                }
+            ]
+        }
+    )
+
+
+def _create_structure_retry_good_response() -> str:
+    return json.dumps(
+        {
+            "changes": [
+                {
+                    "path": "tests/test_calculator.py",
+                    "change_type": "created",
+                    "mode": "operation_based_edit",
+                    "operation": "create_file",
+                    "content": (
+                        "import unittest\n"
+                        "from calculator import add, divide, multiply, sqrt, subtract\n\n\n"
+                        "class TestCalculator(unittest.TestCase):\n"
+                        "    def test_add_positive_numbers(self):\n"
+                        "        self.assertEqual(add(2, 3), 5)\n\n"
+                        "    def test_subtract_positive_numbers(self):\n"
+                        "        self.assertEqual(subtract(5, 2), 3)\n\n"
+                        "    def test_multiply_positive_numbers(self):\n"
+                        "        self.assertEqual(multiply(4, 3), 12)\n\n"
+                        "    def test_sqrt_positive(self):\n"
+                        "        self.assertAlmostEqual(sqrt(4), 2.0)\n\n"
                         "    def test_divide_by_zero_raises_value_error(self):\n"
                         "        with self.assertRaises(ValueError):\n"
                         "            divide(10, 0)\n"
@@ -1337,13 +1678,27 @@ def _remove_tree(path: Path) -> None:
 
 
 class _FakeProvider:
-    def __init__(self, response: str) -> None:
-        self.response = response
-        self.prompt = ""
+    def __init__(self, response: str | list[str]) -> None:
+        self.responses = [response] if isinstance(response, str) else list(response)
+        if not self.responses:
+            raise ValueError("response must not be empty")
+        self.prompts: list[str] = []
 
     def generate(self, prompt: str) -> str:
-        self.prompt = prompt
-        return self.response
+        self.prompts.append(prompt)
+        if len(self.responses) == 1:
+            return self.responses[0]
+        if self.responses:
+            return self.responses.pop(0)
+        return self.prompts[-1]
+
+    @property
+    def prompt(self) -> str:
+        return self.prompts[-1] if self.prompts else ""
+
+    @property
+    def call_count(self) -> int:
+        return len(self.prompts)
 
 
 if __name__ == "__main__":

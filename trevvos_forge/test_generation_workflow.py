@@ -1241,7 +1241,8 @@ def render_test_add_result(*, result: TestAddResult, json_output: bool, console:
         elif sandbox_retry_status == "failed_after_retries":
             console.print("  Test generation sandbox retry failed after retry.")
     if result.sandbox_status == "passed":
-        console.print(f"  Re-run with `--write` to apply after review, or inspect test_diff.patch.")
+        console.print("  trevvos tests apply")
+        console.print("  or inspect test_diff.patch before applying.")
     else:
         console.print("  Review test_sandbox_output.log before writing.")
 

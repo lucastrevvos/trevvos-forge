@@ -120,6 +120,11 @@ from trevvos_forge.test_runner import (
     run_test_specs_in_sandbox,
     write_test_artifacts,
 )
+from trevvos_forge.test_apply_workflow import (
+    TestApplyRequest,
+    render_tests_apply_result,
+    run_tests_apply_workflow,
+)
 from trevvos_forge.test_generation_workflow import (
     TestAddRequest,
     render_test_add_result,
@@ -4486,6 +4491,72 @@ def _run_structure_retry_attempt(
         "raw_response_parsed": raw_retry_parsed,
         "metadata": metadata,
     }
+
+
+@tests_app.command("apply")
+def tests_apply(
+    session_id: Annotated[
+        str | None,
+        typer.Option("--session", "-s", help="Session ID to apply. Defaults to current session."),
+    ] = None,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Apply without interactive confirmation."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Output machine-readable result."),
+    ] = False,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """Apply a validated test patch from a previous dry-run session."""
+    try:
+        workspace_root = path.resolve()
+
+        if not yes:
+            display_id = session_id or "current"
+            if not typer.confirm(
+                f"Apply validated test patch from session {display_id}?", default=False
+            ):
+                console.print("[yellow]Cancelled.[/yellow]")
+                return
+
+        result = run_tests_apply_workflow(
+            TestApplyRequest(
+                repo_root=workspace_root,
+                session_id=session_id,
+            )
+        )
+
+        if json_output:
+            console.print(
+                json.dumps(
+                    {
+                        "status": result.status,
+                        "session_id": result.session_id,
+                        "applied": result.applied,
+                        "files_changed": result.files_changed,
+                        "block_reason": result.block_reason,
+                        **(result.apply_result or {}),
+                    },
+                    indent=2,
+                )
+            )
+            if result.exit_code != 0:
+                raise typer.Exit(code=result.exit_code)
+            return
+
+        render_tests_apply_result(result=result, console=console)
+
+        if result.exit_code != 0:
+            raise typer.Exit(code=result.exit_code)
+
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
 
 
 @tests_app.command("add")

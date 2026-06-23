@@ -419,6 +419,137 @@ class TestGenerationWorkflowTests(unittest.TestCase):
             self.assertIn("## Test generation schema retry", summary)
             self.assertIn("Result: succeeded_after_retry", summary)
 
+    def test_schema_retry_recovers_from_missing_replacement_field(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider(
+                [
+                    _create_missing_string_field_response(
+                        operation="replace_exact_text",
+                        field_name="replacement",
+                        value_key="absent",
+                    ),
+                    _create_test_file_response(),
+                ]
+            )
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="divide",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=False,
+                    keep_sandbox=False,
+                    max_generation_retries=1,
+                    max_structure_retries=1,
+                    max_sandbox_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertEqual(result.status, "test_diff_validated")
+            error = _read_json(result.session_path / "test_generation_error.json")
+            metadata = _read_json(result.session_path / "test_generation_metadata.json")
+            prompt = (result.session_path / "test_generation_schema_retry_prompt.md").read_text(encoding="utf-8")
+
+            self.assertEqual(provider.call_count, 2)
+            self.assertEqual(error["error_type"], "invalid_file_change_schema")
+            self.assertEqual(error["field"], "changes[0].replacement")
+            self.assertIn("replacement", error["suggested_resolution"])
+            self.assertEqual(metadata["generation_retries"]["status"], "succeeded_after_retry")
+            self.assertIn("replacement", prompt)
+            self.assertIn("replace_exact_text", prompt)
+
+    def test_schema_retry_recovers_from_missing_insert_field(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider(
+                [
+                    _create_missing_string_field_response(
+                        operation="append_to_file",
+                        field_name="insert",
+                        value_key="null",
+                    ),
+                    _create_test_file_response(),
+                ]
+            )
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="divide",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=False,
+                    keep_sandbox=False,
+                    max_generation_retries=1,
+                    max_structure_retries=1,
+                    max_sandbox_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertEqual(result.status, "test_diff_validated")
+            error = _read_json(result.session_path / "test_generation_error.json")
+
+            self.assertEqual(error["error_type"], "invalid_file_change_schema")
+            self.assertEqual(error["field"], "changes[0].insert")
+
+    def test_schema_retry_recovers_from_missing_target_field(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider(
+                [
+                    _create_missing_string_field_response(
+                        operation="replace_exact_text",
+                        field_name="target",
+                        value_key="absent",
+                        target_value=None,
+                    ),
+                    _create_test_file_response(),
+                ]
+            )
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="divide",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=False,
+                    keep_sandbox=False,
+                    max_generation_retries=1,
+                    max_structure_retries=1,
+                    max_sandbox_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertEqual(result.status, "test_diff_validated")
+            error = _read_json(result.session_path / "test_generation_error.json")
+
+            self.assertEqual(error["error_type"], "invalid_file_change_schema")
+            self.assertEqual(error["field"], "changes[0].target")
+
     def test_schema_retry_zero_disables_retry(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = _sample_repo(Path(temporary_directory))
@@ -929,6 +1060,31 @@ def _create_unknown_operation_response(operation: str = "replace_in_file") -> st
             ]
         }
     )
+
+
+def _create_missing_string_field_response(
+    *,
+    operation: str,
+    field_name: str,
+    value_key: str,
+    target_value: str | None = "from calculator import add",
+) -> str:
+    change = {
+        "path": "tests/test_calculator.py",
+        "change_type": "modified",
+        "mode": "operation_based_edit",
+        "operation": operation,
+    }
+    if target_value is not None:
+        change["target"] = target_value
+    if value_key == "null":
+        change[field_name] = None
+    elif value_key == "absent":
+        pass
+    else:
+        change[field_name] = value_key
+
+    return json.dumps({"changes": [change]})
 
 
 def _create_production_file_change_response() -> str:

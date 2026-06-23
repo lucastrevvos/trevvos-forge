@@ -829,6 +829,17 @@ Rules:
 - If adding tests to an existing test file, prefer append_to_file.
 - If replacing an import line, use replace_exact_text or replace_block.
 - If creating a new test file, use create_file.
+- Required fields by operation:
+  - append_to_file: path, change_type, mode=operation_based_edit, operation=append_to_file, insert:string
+  - create_file: path, change_type, mode=operation_based_edit, operation=create_file, content:string
+  - replace_exact_text: path, change_type, mode=operation_based_edit, operation=replace_exact_text, target:string, replacement:string
+  - replace_block: path, change_type, mode=operation_based_edit, operation=replace_block, target:string, replacement:string
+  - insert_after_line / insert_before_line / insert_after_heading: path, change_type, mode=operation_based_edit, operation, target:string, insert:string
+- For replace_exact_text and replace_block, replacement must be a non-empty string.
+- For append_to_file, insert must be a non-empty string.
+- Never use `insert` where `replacement` is required.
+- Never omit `replacement` for replace_exact_text or replace_block.
+- Never set required string fields to null.
 - Return ONLY valid JSON with top-level "changes".
 - Do not use Markdown.
 - Do not use a code block.

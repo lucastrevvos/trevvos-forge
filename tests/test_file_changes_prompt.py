@@ -216,6 +216,19 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("Return valid JSON only with top-level \"changes\"", prompt)
         self.assertIn("retry context", prompt)
 
+    def test_test_generation_schema_retry_prompt_contains_required_field_rules(self) -> None:
+        prompt = get_prompt("test_generation_schema_retry").render(
+            test_generation_schema_retry_context="retry context",
+        )
+
+        self.assertIn("replace_exact_text", prompt)
+        self.assertIn("replace_block", prompt)
+        self.assertIn("replacement:string", prompt.replace(" ", ""))
+        self.assertIn("Never use `insert` where `replacement` is required.", prompt)
+        self.assertIn("Never omit `replacement` for replace_exact_text or replace_block.", prompt)
+        self.assertIn("replacement must be a non-empty string", prompt)
+        self.assertIn("retry context", prompt)
+
     def test_test_generation_prompt_contains_unittest_class_rules(self) -> None:
         prompt = get_prompt("test_generation").render(
             test_generation_context="context",

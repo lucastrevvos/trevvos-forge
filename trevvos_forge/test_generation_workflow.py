@@ -1053,8 +1053,11 @@ def render_test_add_result(*, result: TestAddResult, json_output: bool, console:
                 error_payload = {}
             error_type = error_payload.get("error_type", "unknown")
             operation = error_payload.get("operation")
+            field = error_payload.get("field")
             if operation:
                 console.print(f"Schema error: {error_type} ({operation})")
+            elif field:
+                console.print(f"Schema error: {error_type} ({field})")
             else:
                 console.print(f"Schema error: {error_type}")
         if generation_retry_used > 0:
@@ -1188,7 +1191,7 @@ def _build_generation_error_payload(exc: Exception, raw_response: str) -> dict:
     message = str(exc)
     payload: dict[str, Any] = {
         "status": "failed",
-        "error_type": "schema_invalid",
+        "error_type": "invalid_file_change_schema",
         "message": message,
         "raw_response_path": "test_generation_raw_response.json",
         "allowed_operations": sorted(ALLOWED_OPERATION_BASED_EDIT_OPERATIONS),
@@ -1210,7 +1213,8 @@ def _build_generation_error_payload(exc: Exception, raw_response: str) -> dict:
     if "Missing or invalid list field: changes" in message:
         payload.update(
             {
-                "error_type": "missing_changes_list",
+                "error_type": "invalid_file_change_schema",
+                "field": "changes",
                 "suggested_resolution": 'Return a JSON object with a top-level "changes" list.',
             }
         )
@@ -1219,7 +1223,8 @@ def _build_generation_error_payload(exc: Exception, raw_response: str) -> dict:
     if "File changes output must contain at least one change" in message:
         payload.update(
             {
-                "error_type": "empty_changes_list",
+                "error_type": "invalid_file_change_schema",
+                "field": "changes",
                 "suggested_resolution": 'Return a JSON object with a non-empty top-level "changes" list.',
             }
         )
@@ -1243,10 +1248,22 @@ def _build_generation_error_payload(exc: Exception, raw_response: str) -> dict:
         )
         return payload
 
-    if "Missing or invalid string field: changes[" in message or "Invalid item at changes[" in message:
+    missing_string_match = re.search(r"Missing or invalid string field: (changes\[\d+\]\.[A-Za-z_]+)", message)
+    if missing_string_match:
         payload.update(
             {
-                "error_type": "schema_invalid",
+                "error_type": "invalid_file_change_schema",
+                "field": missing_string_match.group(1),
+                "suggested_resolution": _suggested_resolution_for_field(missing_string_match.group(1)),
+            }
+        )
+        return payload
+
+    if "Invalid item at changes[" in message:
+        payload.update(
+            {
+                "error_type": "invalid_file_change_schema",
+                "field": "changes",
                 "suggested_resolution": 'Return a JSON object with a top-level "changes" list and valid file change objects.',
             }
         )
@@ -1278,6 +1295,21 @@ def _suggested_resolution_for_operation(operation: str) -> str:
         f"{operation} is not a valid operation. Use append_to_file, create_file, insert_after_heading, "
         "insert_after_line, insert_before_line, replace_block, or replace_exact_text."
     )
+
+
+def _suggested_resolution_for_field(field: str) -> str:
+    if field.endswith(".replacement"):
+        return "For replace_exact_text or replace_block, provide a non-empty string field named replacement."
+    if field.endswith(".target"):
+        return "Provide a non-empty string field named target for replace_exact_text, replace_block, insert_after_heading, insert_after_line, or insert_before_line."
+    if field.endswith(".insert"):
+        return "Provide a non-empty string field named insert for append_to_file, insert_after_heading, insert_after_line, or insert_before_line."
+    if field.endswith(".content"):
+        return "Provide a non-empty string field named content when creating a new file or using full_file_rewrite."
+    if field == "changes":
+        return 'Return a JSON object with a top-level "changes" list.'
+
+    return 'Return a JSON object with a top-level "changes" list and valid file change objects.'
 
 
 def _build_generation_schema_retry_context(
@@ -1327,6 +1359,7 @@ def _render_generation_error_markdown(error_payload: dict) -> str:
 - error_type: {error_payload.get("error_type", "unknown")}
 - message: {error_payload.get("message", "unknown")}
 - operation: {error_payload.get("operation", "n/a")}
+- field: {error_payload.get("field", "n/a")}
 - suggested_resolution: {error_payload.get("suggested_resolution", "n/a")}
 - raw_response_path: {error_payload.get("raw_response_path", "test_generation_raw_response.json")}
 

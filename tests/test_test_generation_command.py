@@ -1410,6 +1410,9 @@ class TestsAddCommandTests(unittest.TestCase):
         self.assertIn("test_generation_schema_retry", result.output)
         self.assertIn("replace_in_file", result.output.lower())
         self.assertIn("insert_at_position", result.output.lower())
+        self.assertIn("replace_exact_text", result.output)
+        self.assertIn("replace_block", result.output)
+        self.assertIn("Never use `insert` where `replacement` is required.", result.output)
         self.assertIn("Return ONLY valid JSON", result.output)
 
     def test_sandbox_retry_prompt_is_available(self) -> None:
@@ -1449,6 +1452,66 @@ class TestsAddCommandTests(unittest.TestCase):
             self.assertIn("Schema retry used: 1/1", result.output)
             self.assertIn("Test generation schema retry succeeded.", result.output)
             self.assertNotIn("Unknown operation at changes", result.output)
+
+    def test_schema_retry_cli_output_mentions_missing_field(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider([
+                _create_missing_string_field_response(
+                    operation="replace_exact_text",
+                    field_name="replacement",
+                    value_key="absent",
+                ),
+                _create_test_file_response(),
+            ])
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(
+                    app,
+                    ["tests", "add", "calculator.py", "--symbol", "divide", "--path", str(root)],
+                )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("Schema retry used: 1/1", result.output)
+            self.assertIn("Test generation schema retry succeeded.", result.output)
+            self.assertNotIn("Missing or invalid string field", result.output)
+            self.assertNotIn("Schema error:", result.output)
+
+    def test_schema_retry_cli_output_mentions_missing_field_when_disabled(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider(
+                _create_missing_string_field_response(
+                    operation="replace_exact_text",
+                    field_name="replacement",
+                    value_key="absent",
+                )
+            )
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(
+                    app,
+                    [
+                        "tests",
+                        "add",
+                        "calculator.py",
+                        "--symbol",
+                        "divide",
+                        "--max-generation-retries",
+                        "0",
+                        "--path",
+                        str(root),
+                    ],
+                )
+
+            self.assertEqual(result.exit_code, 1, result.output)
+            self.assertIn("Schema error: invalid_file_change_schema (changes[0].replacement)", result.output)
+            self.assertNotIn("Missing or invalid string field", result.output)
+            self.assertIn("Review", result.output)
 
     def test_json_output(self) -> None:
         runner = CliRunner()
@@ -1742,6 +1805,31 @@ def _create_unknown_operation_response(operation: str = "replace_in_file") -> st
             ]
         }
     )
+
+
+def _create_missing_string_field_response(
+    *,
+    operation: str,
+    field_name: str,
+    value_key: str,
+    target_value: str | None = "from calculator import add",
+) -> str:
+    change = {
+        "path": "tests/test_calculator.py",
+        "change_type": "modified",
+        "mode": "operation_based_edit",
+        "operation": operation,
+    }
+    if target_value is not None:
+        change["target"] = target_value
+    if value_key == "null":
+        change[field_name] = None
+    elif value_key == "absent":
+        pass
+    else:
+        change[field_name] = value_key
+
+    return json.dumps({"changes": [change]})
 
 
 def _only_session(root: Path) -> Path:

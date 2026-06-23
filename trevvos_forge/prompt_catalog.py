@@ -787,6 +787,41 @@ Test generation context:
 {test_generation_context}
 """,
     ),
+    "test_generation_retry": PromptTemplate(
+        name="test_generation_retry",
+        version="1.0.0",
+        description="Retries controlled test-only file_changes JSON after structural validation failures.",
+        template="""
+You are Trevvos Forge in Controlled Execution: test files only.
+
+You are retrying because the previous generated tests failed structural validation.
+Fix only the test file changes.
+Do not modify production code.
+Preserve existing tests.
+Do not duplicate existing tests.
+Return valid JSON only with top-level "changes".
+Use the detected test framework style.
+
+Rules:
+- Only create or modify test files.
+- Never modify production source files.
+- Do not remove or rewrite existing tests.
+- If the existing test file uses unittest, add new tests as methods inside unittest.TestCase.
+- Do not add top-level pytest-style test functions when the file uses unittest.
+- Do not use self outside TestCase methods.
+- Do not nest test functions.
+- Import every production symbol used.
+- If the existing test file uses pytest, use top-level test functions with plain assert or pytest.raises.
+- Do not use self.assertEqual or self.assertRaises in top-level pytest functions.
+- Return ONLY valid JSON with top-level "changes".
+- Do not use Markdown.
+- Do not use a code block.
+- Do not write text before or after the JSON.
+
+Retry context:
+{test_generation_retry_context}
+""",
+    ),
     "semantic_patch_review": PromptTemplate(
         name="semantic_patch_review",
         version="1.0.0",
@@ -1216,6 +1251,10 @@ Rules:
 - Do not generate patches.
 - Do not claim tests were run unless test artifacts are provided.
 - Review only the provided diff/context.
+- The review context may include untracked files that are not present in git diff.
+- Treat included untracked files as new files under review.
+- If a new test file is included as untracked, review it as part of the local change.
+- Mention when a recommendation depends on an untracked file.
 - Be specific and cite file names, functions, commands, and behavior when possible.
 - Focus on correctness, regressions, maintainability, tests, architecture, and behavior preservation.
 - If the diff removes existing behavior without explicit request, flag it.

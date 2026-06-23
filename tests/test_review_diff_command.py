@@ -28,6 +28,8 @@ class ReviewDiffCommandTests(unittest.TestCase):
         self.assertIn("Tests to run", prompt)
         self.assertIn("Final recommendation", prompt)
         self.assertIn("request_changes", prompt)
+        self.assertIn("untracked files", prompt)
+        self.assertIn("Treat included untracked files as new files under review", prompt)
 
     def test_review_diff_without_diff_does_not_call_provider(self) -> None:
         runner = CliRunner()
@@ -43,7 +45,7 @@ class ReviewDiffCommandTests(unittest.TestCase):
                 result = runner.invoke(app, ["review-diff", "--path", str(root)])
 
             self.assertEqual(result.exit_code, 0, result.output)
-            self.assertIn("No local diff found to review", result.output)
+            self.assertIn("No local diff or relevant untracked files found to review", result.output)
             build_provider.assert_not_called()
             self.assertFalse((root / ".trevvos" / "sessions").exists())
 
@@ -82,6 +84,64 @@ class ReviewDiffCommandTests(unittest.TestCase):
             self.assertFalse((session_dir / "file_changes.json").exists())
             self.assertFalse((session_dir / "apply_result.json").exists())
 
+    def test_review_diff_includes_untracked_test_file(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            _init_repo(root)
+            (root / "calculator.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+            _git(root, ["add", "calculator.py"])
+            _git(root, ["commit", "-m", "initial"])
+            test_file = root / "tests" / "test_calculator.py"
+            test_file.parent.mkdir()
+            test_file.write_text(
+                "import unittest\n\n"
+                "from calculator import add\n\n\n"
+                "class TestCalculator(unittest.TestCase):\n"
+                "    def test_add(self):\n"
+                "        self.assertEqual(add(1, 2), 3)\n",
+                encoding="utf-8",
+            )
+            provider = _FakeProvider("# Diff Review\n\n## Final recommendation\n\napprove\n")
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(app, ["review-diff", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            session_dir = _only_session(root)
+            untracked = _read_json(session_dir / "untracked_files.json")
+            metadata = _read_json(session_dir / "diff_review_metadata.json")
+            context = (session_dir / "context.md").read_text(encoding="utf-8")
+
+            self.assertIn("Untracked files included", result.output)
+            self.assertIn("tests/test_calculator.py", result.output)
+            self.assertEqual(["tests/test_calculator.py"], metadata["untracked_files_included"])
+            self.assertEqual(["tests/test_calculator.py"], [item["path"] for item in untracked["included"]])
+            self.assertIn("tests/test_calculator.py", provider.prompt)
+            self.assertIn("class TestCalculator", provider.prompt)
+            self.assertIn("## Untracked files", context)
+
+    def test_review_diff_reviews_when_only_relevant_untracked_file_exists(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            _init_repo(root)
+            (root / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            _git(root, ["add", "main.py"])
+            _git(root, ["commit", "-m", "initial"])
+            (root / "new_module.py").write_text("VALUE = 1\n", encoding="utf-8")
+            provider = _FakeProvider("# Diff Review\n\n## Final recommendation\n\napprove\n")
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(app, ["review-diff", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertNotIn("No local diff found", result.output)
+            self.assertTrue(( _only_session(root) / "diff_review.md").exists())
+            self.assertIn("new_module.py", provider.prompt)
+
     def test_review_staged_diff_uses_cached_diff(self) -> None:
         runner = CliRunner()
 
@@ -108,6 +168,78 @@ class ReviewDiffCommandTests(unittest.TestCase):
             self.assertTrue(metadata["staged"])
             self.assertIn("print('staged')", reviewed_diff)
             self.assertNotIn("print('unstaged')", reviewed_diff)
+
+    def test_review_staged_diff_does_not_include_untracked_files_without_staged_diff(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            _init_repo(root)
+            (root / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            _git(root, ["add", "main.py"])
+            _git(root, ["commit", "-m", "initial"])
+            (root / "new_module.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+            with patch("trevvos_forge.cli.build_provider") as build_provider:
+                result = runner.invoke(app, ["review-diff", "--staged", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("No staged diff found to review", result.output)
+            build_provider.assert_not_called()
+            self.assertFalse((root / ".trevvos" / "sessions").exists())
+
+    def test_review_diff_records_skipped_untracked_files(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            _init_repo(root)
+            main = root / "main.py"
+            main.write_text("print('ok')\n", encoding="utf-8")
+            _git(root, ["add", "main.py"])
+            _git(root, ["commit", "-m", "initial"])
+            main.write_text("print('changed')\n", encoding="utf-8")
+            (root / ".trevvos").mkdir()
+            (root / ".trevvos" / "foo.json").write_text("{}", encoding="utf-8")
+            (root / "image.png").write_bytes(b"\x89PNG\r\n")
+            provider = _FakeProvider("# Diff Review\n\n## Final recommendation\n\napprove\n")
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(app, ["review-diff", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            session_dir = _only_session(root)
+            untracked = _read_json(session_dir / "untracked_files.json")
+            skipped = {item["path"]: item["reason"] for item in untracked["skipped"]}
+            metadata = _read_json(session_dir / "diff_review_metadata.json")
+
+            self.assertEqual(skipped[".trevvos"], "ignored_path")
+            self.assertEqual(skipped["image.png"], "unsupported_extension")
+            self.assertEqual(metadata["untracked_files_skipped"], 2)
+
+    def test_review_diff_truncates_large_untracked_file(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            _init_repo(root)
+            (root / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            _git(root, ["add", "main.py"])
+            _git(root, ["commit", "-m", "initial"])
+            large = root / "large_module.py"
+            large.write_text("A = 1\n" * 5000, encoding="utf-8")
+            provider = _FakeProvider("# Diff Review\n\n## Final recommendation\n\napprove\n")
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(app, ["review-diff", "--path", str(root)])
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            session_dir = _only_session(root)
+            untracked = _read_json(session_dir / "untracked_files.json")
+
+            self.assertEqual("large_module.py", untracked["included"][0]["path"])
+            self.assertTrue(untracked["included"][0]["truncated"])
+            self.assertIn("[untracked file truncated because it is too large]", provider.prompt)
 
     def test_review_diff_prompt_includes_profile_status_stat_and_diff(self) -> None:
         runner = CliRunner()

@@ -1,5 +1,6 @@
 import ast
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Annotated
@@ -45,7 +46,7 @@ from trevvos_forge.exceptions import (
     TestRunError,
 )
 from trevvos_forge.file_changes_error_artifacts import write_file_changes_error_artifacts
-from trevvos_forge.file_change_outputs import parse_file_changes_output
+from trevvos_forge.file_change_outputs import FileChange, FileChangesOutput, parse_file_changes_output
 from trevvos_forge.operation_error_artifacts import write_operation_error_artifacts
 from trevvos_forge.plan_error_artifacts import write_plan_error_artifacts
 from trevvos_forge.plan_constraints import (
@@ -134,7 +135,12 @@ from trevvos_forge.test_generation import (
     target_with_symbols,
     validate_file_changes_are_tests_only,
 )
-from trevvos_forge.test_structure_validation import validate_file_changes_test_structure
+from trevvos_forge.test_structure_validation import (
+    build_test_import_repair_payload,
+    compose_generated_test_contents,
+    repair_missing_test_imports,
+    validate_file_changes_test_structure,
+)
 from trevvos_forge.timeline import append_timeline_event, write_timeline_markdown
 from trevvos_forge.verification_coverage import (
     has_failed_verification_coverage,
@@ -143,6 +149,52 @@ from trevvos_forge.verification_coverage import (
 )
 from trevvos_forge.work_workflow import build_work_metadata, write_work_artifacts
 from trevvos_forge.workspace import read_workspace_file, scan_workspace
+
+
+MAX_UNTRACKED_FILE_CHARS = 20_000
+UNTRACKED_TEXT_EXTENSIONS = {
+    ".py",
+    ".cs",
+    ".ts",
+    ".js",
+    ".tsx",
+    ".jsx",
+    ".md",
+    ".json",
+    ".yml",
+    ".yaml",
+    ".toml",
+    ".txt",
+    ".sql",
+}
+UNTRACKED_BINARY_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".pdf",
+    ".zip",
+    ".exe",
+    ".dll",
+    ".pyd",
+}
+UNTRACKED_IGNORED_DIRS = {
+    ".trevvos",
+    ".git",
+    ".venv",
+    "venv",
+    "env",
+    "node_modules",
+    "dist",
+    "build",
+    "coverage",
+    "htmlcov",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+}
 
 
 app = typer.Typer(
@@ -850,6 +902,7 @@ def _build_diff_review_context(
     diff_stat: str,
     diff_text: str,
     staged: bool,
+    untracked_files: dict | None = None,
     max_diff_chars: int = 60_000,
 ) -> tuple[str, list[str]]:
     files_changed = extract_patch_paths(diff_text)
@@ -859,6 +912,8 @@ def _build_diff_review_context(
     if len(diff_body) > max_diff_chars:
         diff_body = diff_body[:max_diff_chars] + "\n\n[diff truncated]"
         truncated = True
+
+    untracked_section = _render_untracked_review_context(untracked_files or {"included": [], "skipped": []})
 
     context = "\n\n".join(
         [
@@ -892,12 +947,214 @@ def _build_diff_review_context(
             "",
             f"Diff truncated: {str(truncated).lower()}",
             "",
+            untracked_section,
+            "",
             "# Available test artifacts",
             "",
             "No test artifacts were provided in this advisory review context.",
         ]
     )
     return context, files_changed
+
+
+def _parse_untracked_status_paths(git_status: str) -> list[str]:
+    paths: list[str] = []
+    for line in git_status.splitlines():
+        if not line.startswith("?? "):
+            continue
+        path = line[3:].strip()
+        if not path:
+            continue
+        if len(path) >= 2 and path[0] == path[-1] == '"':
+            path = path[1:-1]
+        paths.append(path.replace("\\", "/"))
+    return paths
+
+
+def _path_has_ignored_part(relative_path: str) -> bool:
+    return any(part in UNTRACKED_IGNORED_DIRS for part in Path(relative_path).parts)
+
+
+def _is_test_path(relative_path: str) -> bool:
+    normalized = relative_path.replace("\\", "/")
+    name = Path(normalized).name
+    return (
+        normalized.startswith("tests/")
+        or normalized.startswith("test/")
+        or name.startswith("test_")
+        or name.endswith("_test.py")
+    )
+
+
+def _is_supported_untracked_path(relative_path: str) -> bool:
+    suffix = Path(relative_path).suffix.lower()
+    if suffix in UNTRACKED_BINARY_EXTENSIONS:
+        return False
+    return suffix in UNTRACKED_TEXT_EXTENSIONS or _is_test_path(relative_path)
+
+
+def _has_symlink_component(root: Path, relative_path: str) -> bool:
+    current = root
+    for part in Path(relative_path).parts:
+        current = current / part
+        try:
+            if current.is_symlink():
+                return True
+        except OSError:
+            return True
+    return False
+
+
+def _iter_untracked_candidates(root: Path, status_path: str) -> list[str]:
+    if _path_has_ignored_part(status_path.rstrip("/")):
+        return [status_path.rstrip("/")]
+
+    candidate = root / status_path
+    if candidate.is_dir() and not candidate.is_symlink():
+        paths: list[str] = []
+        for child in candidate.rglob("*"):
+            if child.is_dir():
+                continue
+            try:
+                relative = child.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            paths.append(relative)
+        return sorted(paths)
+    return [status_path.rstrip("/")]
+
+
+def _collect_untracked_files_for_review(
+    *,
+    root: Path,
+    git_status: str,
+    max_file_chars: int = MAX_UNTRACKED_FILE_CHARS,
+) -> dict:
+    included: list[dict] = []
+    skipped: list[dict] = []
+    seen: set[str] = set()
+
+    for status_path in _parse_untracked_status_paths(git_status):
+        for relative_path in _iter_untracked_candidates(root, status_path):
+            if not relative_path or relative_path in seen:
+                continue
+            seen.add(relative_path)
+
+            if _path_has_ignored_part(relative_path):
+                skipped.append({"path": relative_path, "reason": "ignored_path"})
+                continue
+            if _has_symlink_component(root, relative_path):
+                skipped.append({"path": relative_path, "reason": "symlink"})
+                continue
+            if not _is_supported_untracked_path(relative_path):
+                skipped.append({"path": relative_path, "reason": "unsupported_extension"})
+                continue
+
+            file_path = root / relative_path
+            if not file_path.is_file():
+                skipped.append({"path": relative_path, "reason": "not_file"})
+                continue
+
+            try:
+                file_size = file_path.stat().st_size
+                with file_path.open("rb") as handle:
+                    raw_content = handle.read(max_file_chars + 1)
+            except OSError as exc:
+                skipped.append({"path": relative_path, "reason": f"read_error:{exc.__class__.__name__}"})
+                continue
+
+            if b"\x00" in raw_content:
+                skipped.append({"path": relative_path, "reason": "binary_content"})
+                continue
+
+            try:
+                content = raw_content.decode("utf-8")
+            except UnicodeDecodeError:
+                if file_size > len(raw_content):
+                    content = raw_content.decode("utf-8", errors="replace")
+                else:
+                    skipped.append({"path": relative_path, "reason": "non_utf8"})
+                    continue
+
+            original_chars = len(content)
+            truncated = file_size > len(raw_content) or len(content) > max_file_chars
+            if truncated:
+                content = content[:max_file_chars] + "\n\n[untracked file truncated because it is too large]"
+
+            included.append(
+                {
+                    "path": relative_path,
+                    "chars": original_chars,
+                    "truncated": truncated,
+                    "content": content,
+                }
+            )
+
+    return {"included": included, "skipped": skipped}
+
+
+def _untracked_files_artifact(untracked_files: dict) -> dict:
+    return {
+        "included": [
+            {
+                "path": item["path"],
+                "chars": item["chars"],
+                "truncated": item["truncated"],
+            }
+            for item in untracked_files.get("included", [])
+        ],
+        "skipped": untracked_files.get("skipped", []),
+    }
+
+
+def _markdown_language_for_path(path: str) -> str:
+    suffix = Path(path).suffix.lower()
+    return {
+        ".py": "python",
+        ".cs": "csharp",
+        ".ts": "typescript",
+        ".tsx": "tsx",
+        ".js": "javascript",
+        ".jsx": "jsx",
+        ".md": "markdown",
+        ".json": "json",
+        ".yml": "yaml",
+        ".yaml": "yaml",
+        ".toml": "toml",
+        ".sql": "sql",
+    }.get(suffix, "text")
+
+
+def _render_untracked_review_context(untracked_files: dict) -> str:
+    included = untracked_files.get("included", [])
+    if not included:
+        return "## Untracked files\n\n<none>"
+
+    sections = [
+        "## Untracked files",
+        "",
+        "Treat these as new files under review; they are not present in git diff.",
+        "",
+        "## Untracked files included in review",
+        "",
+        "\n".join(f"- {item['path']}" for item in included),
+    ]
+    for item in included:
+        language = _markdown_language_for_path(item["path"])
+        sections.extend(
+            [
+                "",
+                f"## Untracked file: {item['path']}",
+                "",
+                f"Chars: {item['chars']}",
+                f"Truncated: {str(item['truncated']).lower()}",
+                "",
+                f"```{language}",
+                item["content"],
+                "```",
+            ]
+        )
+    return "\n".join(sections)
 
 
 def _run_git_capture(repo_root: Path, args: list[str]) -> str:
@@ -1837,9 +2094,24 @@ def review_diff(
         diff_args = ["diff", "--cached"] if staged else ["diff"]
         diff_stat = _run_git_capture(workspace_root, [*diff_args, "--stat"])
         diff_text = _run_git_capture(workspace_root, diff_args)
+        untracked_files = (
+            {"included": [], "skipped": []}
+            if staged
+            else _collect_untracked_files_for_review(root=workspace_root, git_status=git_status)
+        )
+        untracked_artifact = _untracked_files_artifact(untracked_files)
+        untracked_included = [item["path"] for item in untracked_artifact["included"]]
 
         if not diff_text.strip():
-            console.print("[yellow]No local diff found to review.[/yellow]")
+            if staged:
+                console.print("[yellow]No staged diff found to review.[/yellow]")
+            elif untracked_included:
+                pass
+            else:
+                console.print("[yellow]No local diff or relevant untracked files found to review.[/yellow]")
+                return
+
+        if not diff_text.strip() and staged:
             return
 
         settings = load_settings()
@@ -1851,6 +2123,7 @@ def review_diff(
             diff_stat=diff_stat,
             diff_text=diff_text,
             staged=staged,
+            untracked_files=untracked_files,
             max_diff_chars=max_diff_chars,
         )
         provider = build_provider(settings)
@@ -1872,6 +2145,7 @@ def review_diff(
         write_session_text(session=session, file_name="git_status.txt", content=git_status)
         write_session_text(session=session, file_name="diff_stat.txt", content=diff_stat)
         write_session_text(session=session, file_name="local_diff.patch", content=diff_text)
+        write_session_json(session, "untracked_files.json", untracked_artifact)
         write_session_json(session, "project_profile.json", profile)
         write_session_text(session=session, file_name="diff_review_prompt.md", content=prompt)
 
@@ -1889,12 +2163,15 @@ def review_diff(
             "model": settings.model,
             "language": resolved_language,
             "files_changed": files_changed,
+            "untracked_files_included": untracked_included,
+            "untracked_files_skipped": len(untracked_artifact["skipped"]),
             "status": "succeeded",
             "final_recommendation": _extract_final_recommendation(raw_response),
             "artifacts": {
                 "review": "diff_review.md",
                 "metadata": "diff_review_metadata.json",
                 "local_diff": "local_diff.patch",
+                "untracked_files": "untracked_files.json",
                 "git_status": "git_status.txt",
                 "diff_stat": "diff_stat.txt",
                 "context": "context.md",
@@ -1912,6 +2189,7 @@ def review_diff(
                 "diff_review.md",
                 "diff_review_metadata.json",
                 "local_diff.patch",
+                "untracked_files.json",
                 "git_status.txt",
                 "diff_stat.txt",
                 "project_profile.json",
@@ -1928,12 +2206,19 @@ def review_diff(
         console.print("Mode:           advisory")
         console.print(f"Staged:         {str(staged).lower()}")
         console.print(f"Files changed:  {len(files_changed)}")
+        if untracked_included:
+            console.print("Untracked files included")
+            for path_item in untracked_included:
+                console.print(f"  - {path_item}")
+        if untracked_artifact["skipped"]:
+            console.print(f"Untracked files skipped: {len(untracked_artifact['skipped'])}")
         console.print(f"Prompt:         {prompt_template.ref}")
         console.print(f"Model:          {settings.model}")
         console.print("\n[bold]Saved files[/bold]")
         console.print(f"  - {session.path / 'diff_review.md'}")
         console.print(f"  - {session.path / 'diff_review_metadata.json'}")
         console.print(f"  - {session.path / 'local_diff.patch'}")
+        console.print(f"  - {session.path / 'untracked_files.json'}")
         console.print("\n[bold]Review[/bold]\n")
         console.print(raw_response)
 
@@ -3890,6 +4175,314 @@ def tests_inspect(
         raise typer.Exit(code=1)
 
 
+def _attempt_deterministic_test_import_repair(
+    *,
+    workspace_root: Path,
+    target,
+    file_changes: FileChangesOutput,
+    structure_validation: dict,
+) -> tuple[FileChangesOutput, dict]:
+    source_symbols = [symbol.name for symbol in target.symbols]
+    composed_contents = compose_generated_test_contents(workspace_root=workspace_root, file_changes=file_changes)
+    repair_results: list[dict] = []
+    repaired_changes: list[FileChange] = []
+    changes_by_path: dict[str, list[FileChange]] = {}
+
+    for change in file_changes.changes:
+        changes_by_path.setdefault(change.path, []).append(change)
+
+    for path, result in structure_validation.get("files", {}).items():
+        errors = result.get("errors", [])
+        path_changes = changes_by_path.get(path, [])
+
+        if not errors:
+            repaired_changes.extend(path_changes)
+            continue
+
+        import_symbols = _extract_missing_import_symbols(errors)
+
+        if len(import_symbols) != len(errors):
+            return file_changes, build_test_import_repair_payload(
+                test_file=path,
+                source_module=target.source_module,
+                repair_results=[
+                    {
+                        "status": "not_repairable",
+                        "reason": "non_import_validation_error",
+                        "source_module": target.source_module,
+                        "symbols": import_symbols,
+                        "symbols_added": [],
+                    }
+                ],
+            )
+
+        repair = repair_missing_test_imports(
+            content=composed_contents[path],
+            test_file=path,
+            source_module=target.source_module,
+            missing_symbols=import_symbols,
+            source_symbols=source_symbols,
+        )
+        repair_results.append(repair)
+
+        if repair["status"] != "repaired":
+            continue
+
+        repair_change = FileChange(**repair["change"])
+
+        if path_changes and path_changes[0].operation == "create_file":
+            updated_first = FileChange(
+                path=path_changes[0].path,
+                change_type=path_changes[0].change_type,
+                content=repair["content"],
+                mode=path_changes[0].mode,
+                operation=path_changes[0].operation,
+                target=path_changes[0].target,
+                insert=path_changes[0].insert,
+                replacement=path_changes[0].replacement,
+            )
+            repaired_changes.extend([updated_first, *path_changes[1:]])
+        else:
+            repaired_changes.extend([repair_change, *path_changes])
+
+    if all(result.get("status") == "repaired" for result in repair_results):
+        return FileChangesOutput(changes=repaired_changes), build_test_import_repair_payload(
+            test_file=next(iter(structure_validation.get("files", {})), target.test_file),
+            source_module=target.source_module,
+            repair_results=repair_results,
+        )
+
+    if not repair_results:
+        repair_results = [
+            {
+                "status": "not_repairable",
+                "reason": "no_import_errors_found",
+                "source_module": target.source_module,
+                "symbols": [],
+                "symbols_added": [],
+            }
+        ]
+
+    return file_changes, build_test_import_repair_payload(
+        test_file=next(iter(structure_validation.get("files", {})), target.test_file),
+        source_module=target.source_module,
+        repair_results=repair_results,
+    )
+
+
+def _extract_missing_import_symbols(errors: list[str]) -> list[str]:
+    pattern = re.compile(r"^Symbol `([^`]+)` is used but not imported or defined\.$")
+    symbols: list[str] = []
+
+    for error in errors:
+        match = pattern.match(error)
+        if match:
+            symbols.append(match.group(1))
+
+    return sorted(dict.fromkeys(symbols))
+
+
+def _build_structure_retry_context(
+    *,
+    workspace_root: Path,
+    target,
+    file_changes: FileChangesOutput,
+    structure_validation: dict,
+    raw_response: str,
+    raw_response_parsed: dict,
+    existing_tests_check: dict | None,
+    import_repair: dict | None,
+) -> str:
+    composed_contents = compose_generated_test_contents(workspace_root=workspace_root, file_changes=file_changes)
+    validation_json = json.dumps(structure_validation, indent=2, ensure_ascii=False)
+    file_changes_json = json.dumps(file_changes.to_dict(), indent=2, ensure_ascii=False)
+    import_repair_json = json.dumps(import_repair, indent=2, ensure_ascii=False) if import_repair is not None else "null"
+    existing_tests_json = json.dumps(existing_tests_check, indent=2, ensure_ascii=False) if existing_tests_check is not None else "null"
+    current_content = composed_contents.get(target.test_file, "(unavailable)")
+    current_response_parsed = json.dumps(raw_response_parsed, indent=2, ensure_ascii=False)
+    symbols = "\n".join(f"- {symbol.name}" for symbol in target.symbols) or "- none"
+    errors = "\n".join(
+        f"- {path}: {error}"
+        for path, result in structure_validation.get("files", {}).items()
+        for error in result.get("errors", [])
+    ) or "- none"
+
+    return f"""Source file: {target.source_path}
+Source module: {target.source_module}
+Target test file: {target.test_file}
+Detected framework: {target.framework}
+Mode: {'all_symbols' if target.all_symbols else 'single_symbol'}
+Symbols to test:
+{symbols}
+
+Existing tests analysis:
+{existing_tests_json}
+
+Previous file_changes JSON:
+{file_changes_json}
+
+Previous raw response:
+{raw_response}
+
+Previous raw response parsed:
+{current_response_parsed}
+
+Structure validation:
+{validation_json}
+
+Structure validation errors:
+{errors}
+
+Import repair:
+{import_repair_json}
+
+Current generated test content:
+```python
+{current_content}
+```
+"""
+
+
+def _write_structure_retry_artifacts(
+    *,
+    session,
+    attempt: int,
+    prompt: str,
+    raw_response: str,
+    metadata: dict,
+) -> None:
+    prefix = f"test_generation_retry_{attempt}"
+    write_session_text(session, f"{prefix}_prompt.md", prompt)
+    write_session_text(session, f"{prefix}_raw_response.json", raw_response)
+    write_session_json(session, f"{prefix}_metadata.json", metadata)
+    if attempt == 1:
+        write_session_text(session, "test_generation_retry_prompt.md", prompt)
+        write_session_text(session, "test_generation_retry_raw_response.json", raw_response)
+        write_session_json(session, "test_generation_retry_metadata.json", metadata)
+
+
+def _run_structure_retry_attempt(
+    *,
+    session,
+    workspace_root: Path,
+    target,
+    provider,
+    attempt: int,
+    file_changes: FileChangesOutput,
+    structure_validation: dict,
+    existing_tests_check,
+    raw_response: str,
+    raw_response_parsed: dict,
+    import_repair: dict | None,
+) -> dict:
+    retry_prompt_template = get_prompt("test_generation_retry")
+    retry_context = _build_structure_retry_context(
+        workspace_root=workspace_root,
+        target=target,
+        file_changes=file_changes,
+        structure_validation=structure_validation,
+        raw_response=raw_response,
+        raw_response_parsed=raw_response_parsed,
+        existing_tests_check=existing_tests_check.to_dict() if existing_tests_check is not None else None,
+        import_repair=import_repair,
+    )
+    prompt = retry_prompt_template.render(test_generation_retry_context=retry_context)
+    raw_retry_response = provider.generate(prompt)
+    raw_retry_parsed = raw_response_json(raw_retry_response)
+
+    try:
+        retry_file_changes = parse_file_changes_output(raw_retry_response)
+        validate_file_changes_are_tests_only(retry_file_changes)
+    except ForgeError as exc:
+        metadata = {
+            "attempt": attempt,
+            "status": "failed",
+            "reason": type(exc).__name__,
+            "message": str(exc),
+        }
+        _write_structure_retry_artifacts(
+            session=session,
+            attempt=attempt,
+            prompt=prompt,
+            raw_response=raw_retry_response,
+            metadata=metadata,
+        )
+        return {
+            "status": "hard_failure",
+            "metadata": metadata,
+            "prompt": prompt,
+            "raw_response": raw_retry_response,
+            "raw_response_parsed": raw_retry_parsed,
+        }
+
+    retry_structure_validation = validate_file_changes_test_structure(
+        workspace_root=workspace_root,
+        file_changes=retry_file_changes,
+        framework=target.framework,
+        source_symbols=[symbol.name for symbol in target.symbols],
+    )
+    retry_import_repair: dict | None = None
+
+    if retry_structure_validation["status"] == "failed":
+        repaired_retry_file_changes, retry_import_repair = _attempt_deterministic_test_import_repair(
+            workspace_root=workspace_root,
+            target=target,
+            file_changes=retry_file_changes,
+            structure_validation=retry_structure_validation,
+        )
+        if retry_import_repair["status"] == "repaired":
+            retry_file_changes = repaired_retry_file_changes
+            retry_structure_validation = validate_file_changes_test_structure(
+                workspace_root=workspace_root,
+                file_changes=retry_file_changes,
+                framework=target.framework,
+                source_symbols=[symbol.name for symbol in target.symbols],
+            )
+
+    metadata = {
+        "attempt": attempt,
+        "status": retry_structure_validation["status"],
+        "source_path": target.source_path,
+        "test_file": target.test_file,
+        "framework": target.framework,
+        "errors": retry_structure_validation.get("errors", []),
+        "warnings": retry_structure_validation.get("warnings", []),
+        "discovered_tests": retry_structure_validation.get("discovered_tests", []),
+        "import_repair": retry_import_repair,
+        "file_changes": retry_file_changes.to_dict(),
+    }
+    _write_structure_retry_artifacts(
+        session=session,
+        attempt=attempt,
+        prompt=prompt,
+        raw_response=raw_retry_response,
+        metadata=metadata,
+    )
+
+    if retry_structure_validation["status"] == "passed":
+        return {
+            "status": "passed",
+            "file_changes": retry_file_changes,
+            "structure_validation": retry_structure_validation,
+            "import_repair": retry_import_repair,
+            "prompt": prompt,
+            "raw_response": raw_retry_response,
+            "raw_response_parsed": raw_retry_parsed,
+            "metadata": metadata,
+        }
+
+    return {
+        "status": "failed",
+        "file_changes": retry_file_changes,
+        "structure_validation": retry_structure_validation,
+        "import_repair": retry_import_repair,
+        "prompt": prompt,
+        "raw_response": raw_retry_response,
+        "raw_response_parsed": raw_retry_parsed,
+        "metadata": metadata,
+    }
+
+
 @tests_app.command("add")
 def tests_add(
     source_path: Annotated[
@@ -3924,6 +4517,10 @@ def tests_add(
         bool,
         typer.Option("--force", help="Generate tests even when existing tests appear to cover the symbol(s)."),
     ] = False,
+    max_structure_retries: Annotated[
+        int,
+        typer.Option("--max-structure-retries", help="Retry test generation after structural validation failure."),
+    ] = 1,
     timeout: Annotated[
         int,
         typer.Option("--timeout", help="Timeout per sandbox test command in seconds."),
@@ -3959,6 +4556,8 @@ def tests_add(
             raise DiffError("Specify --symbol <name> or --all.")
         if unit and e2e:
             raise DiffError("Choose only one test type: --unit or --e2e.")
+        if max_structure_retries < 0 or max_structure_retries > 3:
+            raise DiffError("--max-structure-retries must be between 0 and 3.")
 
         workspace_root = path.resolve()
         target = build_test_generation_target(
@@ -4087,17 +4686,80 @@ def tests_add(
         file_changes = parse_file_changes_output(raw_response)
         validate_file_changes_are_tests_only(file_changes)
 
-        write_session_json(session, "test_file_changes.json", file_changes.to_dict())
-        write_session_json(session, "file_changes.json", file_changes.to_dict())
-
-        files_changed = [change.path for change in file_changes.changes]
+        previous_raw_response = raw_response
+        previous_raw_response_parsed = raw_response_json(raw_response)
+        current_file_changes = file_changes
         structure_validation = validate_file_changes_test_structure(
             workspace_root=workspace_root,
-            file_changes=file_changes,
+            file_changes=current_file_changes,
             framework=target.framework,
             source_symbols=[symbol.name for symbol in target.symbols],
         )
+        import_repair: dict | None = None
+        structure_retries = {"max": max_structure_retries, "used": 0, "status": "not_needed"}
+
+        if structure_validation["status"] == "failed":
+            repaired_file_changes, import_repair = _attempt_deterministic_test_import_repair(
+                workspace_root=workspace_root,
+                target=target,
+                file_changes=current_file_changes,
+                structure_validation=structure_validation,
+            )
+            write_session_json(session, "test_import_repair.json", import_repair)
+
+            if import_repair["status"] == "repaired":
+                current_file_changes = repaired_file_changes
+                structure_validation = validate_file_changes_test_structure(
+                    workspace_root=workspace_root,
+                    file_changes=current_file_changes,
+                    framework=target.framework,
+                    source_symbols=[symbol.name for symbol in target.symbols],
+                )
+
+        while structure_validation["status"] == "failed" and structure_retries["used"] < max_structure_retries:
+            attempt = structure_retries["used"] + 1
+            retry_result = _run_structure_retry_attempt(
+                session=session,
+                workspace_root=workspace_root,
+                target=target,
+                provider=provider,
+                attempt=attempt,
+                file_changes=current_file_changes,
+                structure_validation=structure_validation,
+                existing_tests_check=existing_tests_check,
+                raw_response=previous_raw_response,
+                raw_response_parsed=previous_raw_response_parsed,
+                import_repair=import_repair,
+            )
+            structure_retries["used"] = attempt
+
+            if retry_result["status"] == "hard_failure":
+                structure_retries["status"] = "failed_after_retries"
+                write_session_json(session, "test_structure_validation.json", structure_validation)
+                current_file_changes = retry_result.get("file_changes", current_file_changes)
+                break
+
+            current_file_changes = retry_result["file_changes"]
+            structure_validation = retry_result["structure_validation"]
+            import_repair = retry_result["import_repair"]
+            previous_raw_response = retry_result["raw_response"]
+            previous_raw_response_parsed = retry_result["raw_response_parsed"]
+
+            if structure_validation["status"] == "passed":
+                structure_retries["status"] = "succeeded_after_retry"
+                break
+
+        if structure_validation["status"] == "failed":
+            if structure_retries["used"] > 0 and structure_retries["status"] != "failed_after_retries":
+                structure_retries["status"] = "failed_after_retries"
+            elif structure_retries["used"] == 0:
+                structure_retries["status"] = "not_needed"
+
+        write_session_json(session, "test_file_changes.json", current_file_changes.to_dict())
+        write_session_json(session, "file_changes.json", current_file_changes.to_dict())
         write_session_json(session, "test_structure_validation.json", structure_validation)
+        files_changed = [change.path for change in current_file_changes.changes]
+
         if structure_validation["status"] == "failed":
             metadata = metadata_for_target(
                 target=target,
@@ -4107,6 +4769,8 @@ def tests_add(
                 files_changed=files_changed,
                 existing_tests_check=existing_tests_check,
                 structure_validation=structure_validation,
+                import_repair=import_repair,
+                structure_retries=structure_retries,
                 symbols_original=original_symbols,
                 provider_called=True,
                 write_allowed=False,
@@ -4122,6 +4786,8 @@ def tests_add(
                     status="failed_test_structure_validation",
                     existing_tests_check=existing_tests_check,
                     structure_validation=structure_validation,
+                    import_repair=import_repair,
+                    structure_retries=structure_retries,
                 ),
             )
             update_session_status(session, "tests_add_failed")
@@ -4133,18 +4799,31 @@ def tests_add(
                 reason="failed_test_structure_validation",
                 artifacts=[
                     "test_structure_validation.json",
+                    "test_import_repair.json",
                     "test_generation_metadata.json",
                     "test_generation_summary.md",
+                    *(
+                        [
+                            "test_generation_retry_prompt.md",
+                            "test_generation_retry_raw_response.json",
+                            "test_generation_retry_metadata.json",
+                        ]
+                        if structure_retries["used"] > 0
+                        else []
+                    ),
                 ],
             )
-            console.print("[red]Generated test file failed structural validation.[/red]")
+            if structure_retries["used"] > 0:
+                console.print("[red]Generated tests still failed structural validation after retry.[/red]")
+            else:
+                console.print("[red]Generated test file failed structural validation.[/red]")
             console.print(f"Review {session.path / 'test_structure_validation.json'}.")
             raise typer.Exit(code=1)
 
         diff_warnings: list[str] = []
         unified_diff = build_unified_diff_from_file_changes(
             workspace_root=workspace_root,
-            file_changes=file_changes,
+            file_changes=current_file_changes,
             warnings=diff_warnings,
         )
         write_session_text(session, "test_diff.patch", unified_diff)
@@ -4228,13 +4907,15 @@ def tests_add(
             write=write,
             prompt_ref=prompt_template.ref,
             status="diff_ready",
-            files_changed=files_changed,
+            files_changed=[change.path for change in current_file_changes.changes],
             sandbox_status=sandbox_result.status,
             sandbox_commands=test_commands,
             sandbox_command_source=command_source,
             symbol_selector=symbol_selector,
             existing_tests_check=existing_tests_check,
             structure_validation=structure_validation,
+            import_repair=import_repair,
+            structure_retries=structure_retries,
             symbols_original=original_symbols,
             provider_called=True,
             write_allowed=write_allowed,
@@ -4245,11 +4926,13 @@ def tests_add(
             "test_generation_summary.md",
             build_test_generation_summary(
                 target=target,
-                files_changed=files_changed,
+                files_changed=[change.path for change in current_file_changes.changes],
                 write=write,
                 status="diff_ready",
                 existing_tests_check=existing_tests_check,
                 structure_validation=structure_validation,
+                import_repair=import_repair,
+                structure_retries=structure_retries,
             ),
         )
 
@@ -4270,6 +4953,11 @@ def tests_add(
                 "test_structure_validation.json",
                 "test_sandbox_results.json",
                 "test_sandbox_output.log",
+                *(
+                    ["test_import_repair.json"]
+                    if import_repair is not None
+                    else []
+                ),
             ],
             files_changed=files_changed,
             sandbox_status=sandbox_result.status,

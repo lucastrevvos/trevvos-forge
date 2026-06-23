@@ -197,6 +197,45 @@ class FileChangesPromptTests(unittest.TestCase):
         self.assertIn("do not replace existing subcommands", prompt)
         self.assertIn("Add new parser/dispatch cases", prompt)
 
+    def test_test_generation_retry_prompt_contains_structure_rules(self) -> None:
+        prompt = get_prompt("test_generation_retry").render(
+            test_generation_retry_context="retry context",
+        )
+
+        self.assertIn("retrying because the previous generated tests failed structural validation", prompt)
+        self.assertIn("Fix only the test file changes", prompt)
+        self.assertIn("Do not modify production code", prompt)
+        self.assertIn("Preserve existing tests", prompt)
+        self.assertIn("Do not duplicate existing tests", prompt)
+        self.assertIn("replace_block of the whole TestCase class", prompt)
+        self.assertIn("exactly 4 spaces", prompt)
+        self.assertIn("Never nest def test_* inside another test method", prompt)
+        self.assertIn("Do not add top-level pytest-style test functions", prompt)
+        self.assertIn("self outside TestCase methods", prompt)
+        self.assertIn("Import every production symbol used", prompt)
+        self.assertIn("Return valid JSON only with top-level \"changes\"", prompt)
+        self.assertIn("retry context", prompt)
+
+    def test_test_generation_prompt_contains_unittest_class_rules(self) -> None:
+        prompt = get_prompt("test_generation").render(
+            test_generation_context="context",
+        )
+
+        self.assertIn("replace_block of the whole TestCase class", prompt)
+        self.assertIn("exactly 4 spaces", prompt)
+        self.assertIn("Never nest def test_* inside another test method", prompt)
+        self.assertIn("Import every production symbol used", prompt)
+
+    def test_test_generation_sandbox_retry_prompt_contains_unittest_rules(self) -> None:
+        prompt = get_prompt("test_generation_sandbox_retry").render(
+            test_generation_sandbox_retry_context="retry context",
+        )
+
+        self.assertIn("replace_block of the whole TestCase class", prompt)
+        self.assertIn("exactly 4 spaces", prompt)
+        self.assertIn("Never nest def test_* inside another test method", prompt)
+        self.assertIn("Do not assert exceptions unless the source implementation clearly raises", prompt)
+
     def test_repair_file_changes_prompt_contains_repair_evidence_rules(self) -> None:
         prompt = get_prompt("repair_file_changes").render(
             repair_context="repair context",

@@ -447,6 +447,7 @@ def build_test_generation_summary(
     generation_retries: dict | None = None,
     sandbox_retries: dict | None = None,
     structure_validation: dict | None = None,
+    unittest_method_repair: dict | None = None,
     import_repair: dict | None = None,
     structure_retries: dict | None = None,
 ) -> str:
@@ -457,6 +458,7 @@ def build_test_generation_summary(
     generation_retry_summary = _generation_retry_summary_section(generation_retries)
     sandbox_retry_summary = _sandbox_retry_summary_section(sandbox_retries)
     structure_summary = _structure_validation_summary_section(structure_validation)
+    unittest_method_repair_summary = _unittest_method_repair_summary_section(unittest_method_repair)
     import_repair_summary = _import_repair_summary_section(import_repair)
     structure_retry_summary = _structure_retry_summary_section(structure_retries)
     return f"""# Test Generation Summary
@@ -490,6 +492,10 @@ Status: {status}
 
 {structure_summary}
 
+## Unittest method repair
+
+{unittest_method_repair_summary}
+
 ## Test import repair
 
 {import_repair_summary}
@@ -522,6 +528,7 @@ def metadata_for_target(
     generation_retries: dict | None = None,
     sandbox_retries: dict | None = None,
     structure_validation: dict | None = None,
+    unittest_method_repair: dict | None = None,
     import_repair: dict | None = None,
     structure_retries: dict | None = None,
     symbols_original: list[str] | None = None,
@@ -574,6 +581,15 @@ def metadata_for_target(
             "errors": structure_validation.get("errors", []),
             "warnings": structure_validation.get("warnings", []),
             "discovered_tests": structure_validation.get("discovered_tests", []),
+        }
+
+    if unittest_method_repair is not None:
+        metadata["test_unittest_method_repair"] = {
+            "status": unittest_method_repair.get("status"),
+            "test_file": unittest_method_repair.get("test_file"),
+            "strategy": unittest_method_repair.get("strategy"),
+            "methods_repaired": unittest_method_repair.get("methods_repaired", []),
+            "reason": unittest_method_repair.get("reason"),
         }
 
     if import_repair is not None:
@@ -752,6 +768,27 @@ Warnings:
 
 Discovered tests:
 {tests}"""
+
+
+def _unittest_method_repair_summary_section(unittest_method_repair: dict | None) -> str:
+    if unittest_method_repair is None:
+        return "Not run."
+
+    methods = "\n".join(f"- {method}" for method in unittest_method_repair.get("methods_repaired", [])) or "- none"
+    lines = [
+        f"Status: {unittest_method_repair.get('status', 'unknown')}",
+    ]
+    strategy = unittest_method_repair.get("strategy")
+    if strategy:
+        lines.append(f"Strategy: {strategy}")
+    reason = unittest_method_repair.get("reason")
+    if reason:
+        lines.append(f"Reason: {reason}")
+    lines.append("")
+    lines.append("Methods:")
+    lines.append(methods)
+
+    return "\n".join(lines)
 
 
 def _import_repair_summary_section(import_repair: dict | None) -> str:

@@ -45,6 +45,7 @@ from trevvos_forge.test_structure_validation import (
     build_test_import_repair_payload,
     compose_generated_test_contents,
     repair_missing_test_imports,
+    repair_unittest_method_indentation,
     validate_file_changes_test_structure,
 )
 from trevvos_forge.timeline import append_timeline_event
@@ -376,7 +377,29 @@ def run_tests_add_workflow(
         source_symbols=[symbol.name for symbol in target.symbols],
     )
     import_repair: dict | None = None
+    unittest_method_repair: dict | None = None
     structure_retries = {"max": request.max_structure_retries, "used": 0, "status": "not_needed"}
+
+    if structure_validation["status"] == "failed":
+        repaired_file_changes, unittest_method_repair = _attempt_deterministic_unittest_method_repair(
+            target=target,
+            file_changes=current_file_changes,
+            structure_validation=structure_validation,
+        )
+        write_session_json(
+            session,
+            "test_unittest_method_repair.json",
+            _summarize_unittest_method_repair(unittest_method_repair),
+        )
+
+        if unittest_method_repair["status"] == "repaired":
+            current_file_changes = repaired_file_changes
+            structure_validation = validate_file_changes_test_structure(
+                workspace_root=workspace_root,
+                file_changes=current_file_changes,
+                framework=target.framework,
+                source_symbols=[symbol.name for symbol in target.symbols],
+            )
 
     if structure_validation["status"] == "failed":
         repaired_file_changes, import_repair = _attempt_deterministic_test_import_repair(
@@ -450,6 +473,7 @@ def run_tests_add_workflow(
             existing_tests_check=existing_tests_check,
             generation_retries=generation_retries,
             structure_validation=structure_validation,
+            unittest_method_repair=unittest_method_repair,
             import_repair=import_repair,
             structure_retries=structure_retries,
             symbols_original=original_symbols,
@@ -468,6 +492,7 @@ def run_tests_add_workflow(
                 existing_tests_check=existing_tests_check,
                 generation_retries=generation_retries,
                 structure_validation=structure_validation,
+                unittest_method_repair=unittest_method_repair,
                 import_repair=import_repair,
                 structure_retries=structure_retries,
             ),
@@ -517,6 +542,7 @@ def run_tests_add_workflow(
                 "structure_validation": "test_structure_validation.json",
                 "sandbox_results": "test_sandbox_results.json",
                 "sandbox_output": "test_sandbox_output.log",
+                **({"unittest_method_repair": "test_unittest_method_repair.json"} if unittest_method_repair is not None else {}),
                 **({"import_repair": "test_import_repair.json"} if import_repair is not None else {}),
             },
             message="[red]Generated test file failed structural validation.[/red]"
@@ -624,6 +650,7 @@ def run_tests_add_workflow(
         generation_retries=generation_retries,
         sandbox_retries=sandbox_retries,
         structure_validation=structure_validation,
+        unittest_method_repair=unittest_method_repair,
         import_repair=import_repair,
         structure_retries=structure_retries,
         symbols_original=original_symbols,
@@ -643,6 +670,7 @@ def run_tests_add_workflow(
             generation_retries=generation_retries,
             sandbox_retries=sandbox_retries,
             structure_validation=structure_validation,
+            unittest_method_repair=unittest_method_repair,
             import_repair=import_repair,
             structure_retries=structure_retries,
         ),
@@ -702,6 +730,7 @@ def run_tests_add_workflow(
                         existing_tests_check=existing_tests_check,
                         generation_retries=generation_retries,
                         sandbox_retries=sandbox_retries,
+                        unittest_method_repair=unittest_method_repair,
                         write=request.write,
                         command_text=command_text,
                         request=request,
@@ -715,7 +744,23 @@ def run_tests_add_workflow(
                 framework=target.framework,
                 source_symbols=[symbol.name for symbol in target.symbols],
             )
+            retry_unittest_method_repair: dict | None = None
             retry_import_repair: dict | None = None
+            if retry_structure_validation["status"] == "failed":
+                repaired_retry_file_changes, retry_unittest_method_repair = _attempt_deterministic_unittest_method_repair(
+                    target=target,
+                    file_changes=retry_file_changes,
+                    structure_validation=retry_structure_validation,
+                )
+                if retry_unittest_method_repair["status"] == "repaired":
+                    retry_file_changes = repaired_retry_file_changes
+                    retry_structure_validation = validate_file_changes_test_structure(
+                        workspace_root=workspace_root,
+                        file_changes=retry_file_changes,
+                        framework=target.framework,
+                        source_symbols=[symbol.name for symbol in target.symbols],
+                    )
+
             if retry_structure_validation["status"] == "failed":
                 repaired_retry_file_changes, retry_import_repair = _attempt_deterministic_test_import_repair(
                     workspace_root=workspace_root,
@@ -745,6 +790,7 @@ def run_tests_add_workflow(
                 existing_tests_check=existing_tests_check,
                 generation_retries=generation_retries,
                 structure_validation=retry_structure_validation,
+                unittest_method_repair=retry_unittest_method_repair,
                 import_repair=retry_import_repair,
                 structure_retries=retry_structure_retries,
                 original_symbols=original_symbols,
@@ -781,6 +827,7 @@ def run_tests_add_workflow(
                     existing_tests_check=existing_tests_check,
                     generation_retries=generation_retries,
                     sandbox_retries=sandbox_retries,
+                    unittest_method_repair=retry_unittest_method_repair,
                     write=request.write,
                     command_text=command_text,
                     request=request,
@@ -798,6 +845,7 @@ def run_tests_add_workflow(
             existing_tests_check=existing_tests_check,
             generation_retries=generation_retries,
             sandbox_retries=sandbox_retries,
+            unittest_method_repair=unittest_method_repair,
             write=request.write,
             command_text=command_text,
             request=request,
@@ -828,6 +876,7 @@ def run_tests_add_workflow(
                 "structure_validation": "test_structure_validation.json",
                 "sandbox_results": "test_sandbox_results.json",
                 "sandbox_output": "test_sandbox_output.log",
+                **({"unittest_method_repair": "test_unittest_method_repair.json"} if unittest_method_repair is not None else {}),
                 **({"import_repair": "test_import_repair.json"} if import_repair is not None else {}),
             },
             message=(
@@ -1501,6 +1550,7 @@ def _finalize_sandbox_stage(
     existing_tests_check: ExistingTestsCheck,
     generation_retries: dict,
     structure_validation: dict,
+    unittest_method_repair: dict | None,
     import_repair: dict | None,
     structure_retries: dict,
     original_symbols: list[str],
@@ -1602,6 +1652,7 @@ def _finalize_sandbox_stage(
         generation_retries=generation_retries,
         sandbox_retries=sandbox_retries,
         structure_validation=structure_validation,
+        unittest_method_repair=unittest_method_repair,
         import_repair=import_repair,
         structure_retries=structure_retries,
         symbols_original=original_symbols,
@@ -1621,6 +1672,7 @@ def _finalize_sandbox_stage(
             generation_retries=generation_retries,
             sandbox_retries=sandbox_retries,
             structure_validation=structure_validation,
+            unittest_method_repair=unittest_method_repair,
             import_repair=import_repair,
             structure_retries=structure_retries,
         ),
@@ -1713,6 +1765,7 @@ def _build_sandbox_failure_result(
     existing_tests_check: ExistingTestsCheck,
     generation_retries: dict,
     sandbox_retries: dict,
+    unittest_method_repair: dict | None,
     write: bool,
     command_text: str,
     request: TestAddRequest,
@@ -1727,6 +1780,7 @@ def _build_sandbox_failure_result(
         existing_tests_check=existing_tests_check,
         generation_retries=generation_retries,
         sandbox_retries=sandbox_retries,
+        unittest_method_repair=unittest_method_repair,
         symbols_original=original_symbols,
         provider_called=True,
         write_allowed=False,
@@ -1743,6 +1797,7 @@ def _build_sandbox_failure_result(
             existing_tests_check=existing_tests_check,
             generation_retries=generation_retries,
             sandbox_retries=sandbox_retries,
+            unittest_method_repair=unittest_method_repair,
         ),
     )
     session = update_session_status(session, "tests_add_failed")
@@ -1823,6 +1878,136 @@ def _record_timeline_event(session: ForgeSession, event: str, command: str, stat
             **fields,
         },
     )
+
+
+def _attempt_deterministic_unittest_method_repair(
+    *,
+    target: TestGenerationTarget,
+    file_changes: FileChangesOutput,
+    structure_validation: dict,
+) -> tuple[FileChangesOutput, dict]:
+    if target.framework != "unittest":
+        return file_changes, {
+            "status": "not_repairable",
+            "reason": "framework_not_supported",
+            "test_file": target.test_file,
+            "strategy": "normalize_unittest_method_indentation",
+            "methods_repaired": [],
+        }
+
+    files = structure_validation.get("files", {})
+    nested_paths = [
+        path
+        for path, result in files.items()
+        if any(str(error).startswith("Nested test function `") for error in result.get("errors", []))
+    ]
+
+    if not nested_paths:
+        return file_changes, {
+            "status": "not_repairable",
+            "reason": "no_unittest_test_methods",
+            "test_file": target.test_file,
+            "strategy": "normalize_unittest_method_indentation",
+            "methods_repaired": [],
+        }
+
+    if len(nested_paths) > 1:
+        return file_changes, {
+            "status": "not_repairable",
+            "reason": "complex_nested_structure",
+            "test_file": target.test_file,
+            "strategy": "normalize_unittest_method_indentation",
+            "methods_repaired": [],
+        }
+
+    path = nested_paths[0]
+    path_result = files.get(path, {})
+    errors = [str(error) for error in path_result.get("errors", [])]
+    non_import_errors = [
+        error
+        for error in errors
+        if not error.startswith("Nested test function `") and not error.startswith("Symbol `")
+    ]
+
+    if non_import_errors:
+        return file_changes, {
+            "status": "not_repairable",
+            "reason": "complex_nested_structure",
+            "test_file": path,
+            "strategy": "normalize_unittest_method_indentation",
+            "methods_repaired": [],
+        }
+
+    path_changes = [change for change in file_changes.changes if change.path == path]
+    if not path_changes:
+        return file_changes, {
+            "status": "not_repairable",
+            "reason": "complex_nested_structure",
+            "test_file": path,
+            "strategy": "normalize_unittest_method_indentation",
+            "methods_repaired": [],
+        }
+
+    if any(change.operation != "append_to_file" for change in path_changes):
+        return file_changes, {
+            "status": "not_repairable",
+            "reason": "complex_nested_structure",
+            "test_file": path,
+            "strategy": "normalize_unittest_method_indentation",
+            "methods_repaired": [],
+        }
+
+    repaired_path_changes: list[FileChange] = []
+    methods_repaired: list[str] = []
+
+    for change in path_changes:
+        insert = change.insert
+        if not isinstance(insert, str):
+            return file_changes, {
+                "status": "not_repairable",
+                "reason": "complex_nested_structure",
+                "test_file": path,
+                "strategy": "normalize_unittest_method_indentation",
+                "methods_repaired": [],
+            }
+
+        repair_result = repair_unittest_method_indentation(content=insert, test_file=path)
+        if repair_result["status"] != "repaired":
+            return file_changes, repair_result
+
+        methods_repaired.extend(repair_result.get("methods_repaired", []))
+        repaired_path_changes.append(
+            FileChange(
+                path=change.path,
+                change_type=change.change_type,
+                content=change.content,
+                mode=change.mode,
+                operation=change.operation,
+                target=change.target,
+                insert=repair_result["content"],
+                replacement=change.replacement,
+            )
+        )
+
+    repaired_changes: list[FileChange] = []
+    queue = list(repaired_path_changes)
+
+    for change in file_changes.changes:
+        if change.path != path:
+            repaired_changes.append(change)
+            continue
+
+        if queue:
+            repaired_changes.append(queue.pop(0))
+        else:
+            repaired_changes.append(change)
+
+    return FileChangesOutput(changes=repaired_changes), {
+        "status": "repaired",
+        "test_file": path,
+        "strategy": "normalize_unittest_method_indentation",
+        "methods_repaired": methods_repaired,
+    }
 
 
 def _attempt_deterministic_test_import_repair(
@@ -1920,6 +2105,19 @@ def _attempt_deterministic_test_import_repair(
     )
 
 
+def _summarize_unittest_method_repair(repair_result: dict | None) -> dict | None:
+    if repair_result is None:
+        return None
+
+    return {
+        "status": repair_result.get("status"),
+        "test_file": repair_result.get("test_file"),
+        "strategy": repair_result.get("strategy"),
+        "methods_repaired": repair_result.get("methods_repaired", []),
+        "reason": repair_result.get("reason"),
+    }
+
+
 def _extract_missing_import_symbols(errors: list[str]) -> list[str]:
     pattern = re.compile(r"^Symbol `([^`]+)` is used but not imported or defined\.$")
     symbols: list[str] = []
@@ -1992,7 +2190,23 @@ def _run_structure_retry_attempt(
         framework=target.framework,
         source_symbols=[symbol.name for symbol in target.symbols],
     )
+    retry_unittest_method_repair: dict | None = None
     retry_import_repair: dict | None = None
+
+    if retry_structure_validation["status"] == "failed":
+        repaired_retry_file_changes, retry_unittest_method_repair = _attempt_deterministic_unittest_method_repair(
+            target=target,
+            file_changes=retry_file_changes,
+            structure_validation=retry_structure_validation,
+        )
+        if retry_unittest_method_repair["status"] == "repaired":
+            retry_file_changes = repaired_retry_file_changes
+            retry_structure_validation = validate_file_changes_test_structure(
+                workspace_root=workspace_root,
+                file_changes=retry_file_changes,
+                framework=target.framework,
+                source_symbols=[symbol.name for symbol in target.symbols],
+            )
 
     if retry_structure_validation["status"] == "failed":
         repaired_retry_file_changes, retry_import_repair = _attempt_deterministic_test_import_repair(
@@ -2019,6 +2233,7 @@ def _run_structure_retry_attempt(
         "errors": retry_structure_validation.get("errors", []),
         "warnings": retry_structure_validation.get("warnings", []),
         "discovered_tests": retry_structure_validation.get("discovered_tests", []),
+        "unittest_method_repair": retry_unittest_method_repair,
         "import_repair": retry_import_repair,
         "file_changes": retry_file_changes.to_dict(),
     }

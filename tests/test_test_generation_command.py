@@ -1420,6 +1420,15 @@ class TestsAddCommandTests(unittest.TestCase):
         self.assertIn("Do not assert exceptions unless the source implementation clearly raises", result.output)
         self.assertIn("sandbox failure log", result.output.lower())
 
+    def test_structure_retry_prompt_is_available(self) -> None:
+        result = CliRunner().invoke(app, ["prompts", "show", "test_generation_retry"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("test_generation_retry", result.output)
+        self.assertIn("replace_block of the whole TestCase class", result.output)
+        self.assertIn("exactly 4 spaces", result.output)
+        self.assertIn("Never nest def test_* inside another test method", result.output)
+
     def test_schema_retry_cli_output_mentions_retry(self) -> None:
         runner = CliRunner()
 

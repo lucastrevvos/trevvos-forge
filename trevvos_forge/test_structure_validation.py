@@ -1,10 +1,33 @@
 import ast
+import ast
+import re
+from dataclasses import dataclass
 from collections import defaultdict
 from pathlib import Path, PurePosixPath
 
 from trevvos_forge.exceptions import DiffError
-from trevvos_forge.file_change_outputs import FileChangesOutput
+from trevvos_forge.file_change_outputs import FileChange, FileChangesOutput
 from trevvos_forge.operation_applier import apply_operation_change_to_content
+
+IMPORT_ERROR_PREFIX = "Symbol `"
+IMPORT_ERROR_SUFFIX = "` is used but not imported or defined."
+SAFE_IMPORT_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+@dataclass(frozen=True)
+class SimpleImportInfo:
+    path: str
+    text: str
+    names: list[ast.alias]
+
+
+@dataclass(frozen=True)
+class ImportInsertionPoint:
+    path: str
+    kind: str
+    target_line: str
+    needs_blank_line_before: bool
+    needs_blank_line_after: bool
 
 
 def validate_generated_test_structure(
@@ -107,7 +130,7 @@ def validate_file_changes_test_structure(
     framework: str,
     source_symbols: list[str] | None = None,
 ) -> dict:
-    final_contents = _compose_final_test_contents(workspace_root=workspace_root, file_changes=file_changes)
+    final_contents = compose_generated_test_contents(workspace_root=workspace_root, file_changes=file_changes)
     file_results = {
         path: validate_generated_test_structure(
             content=content,
@@ -128,10 +151,10 @@ def validate_file_changes_test_structure(
         "warnings": warnings,
         "discovered_tests": discovered_tests,
         "files": file_results,
-    }
+}
 
 
-def _compose_final_test_contents(*, workspace_root: Path, file_changes: FileChangesOutput) -> dict[str, str]:
+def compose_generated_test_contents(*, workspace_root: Path, file_changes: FileChangesOutput) -> dict[str, str]:
     changes_by_path: dict[str, list] = defaultdict(list)
 
     for change in file_changes.changes:
@@ -170,8 +193,264 @@ def _compose_final_test_contents(*, workspace_root: Path, file_changes: FileChan
     return final_contents
 
 
+def repair_missing_test_imports(
+    *,
+    content: str,
+    test_file: str,
+    source_module: str,
+    missing_symbols: list[str],
+    source_symbols: list[str],
+) -> dict:
+    missing_set = [symbol for symbol in dict.fromkeys(missing_symbols) if symbol in source_symbols]
+
+    if not missing_set:
+        return {
+            "status": "not_repairable",
+            "reason": "missing_symbol_not_in_source",
+            "source_module": source_module,
+            "symbols": sorted(set(missing_symbols)),
+            "symbols_added": [],
+        }
+
+    if not SAFE_IMPORT_NAME_PATTERN.fullmatch(source_module):
+        return {
+            "status": "not_repairable",
+            "reason": "unsafe_source_module",
+            "source_module": source_module,
+            "symbols": sorted(set(missing_set)),
+            "symbols_added": [],
+        }
+
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return {
+            "status": "not_repairable",
+            "reason": "syntax_error",
+            "source_module": source_module,
+            "symbols": sorted(set(missing_set)),
+            "symbols_added": [],
+        }
+
+    simple_import = _find_simple_source_import(tree, source_module, test_file=test_file, content=content)
+    ordered_symbols = sorted({*_existing_import_names(simple_import), *missing_set})
+    import_line = f"from {source_module} import {', '.join(ordered_symbols)}"
+
+    if simple_import is not None:
+        original_line = simple_import.text
+        repaired_content = content.replace(original_line, import_line, 1)
+        return {
+            "status": "repaired",
+            "source_module": source_module,
+            "symbols_added": sorted(set(missing_set)),
+            "strategy": "updated_existing_from_import",
+            "content": _ensure_final_newline(repaired_content),
+            "change": {
+                "path": simple_import.path,
+                "change_type": "modified",
+                "content": None,
+                "mode": "operation_based_edit",
+                "operation": "replace_exact_text",
+                "target": original_line,
+                "replacement": import_line,
+            },
+        }
+
+    insertion = _find_import_insertion_point(tree=tree, content=content, test_file=test_file)
+    if insertion is None:
+        return {
+            "status": "not_repairable",
+            "reason": "no_safe_import_insertion_point",
+            "source_module": source_module,
+            "symbols": sorted(set(missing_set)),
+            "symbols_added": [],
+        }
+
+    target_line = insertion.target_line
+    import_insert = f"from {source_module} import {', '.join(ordered_symbols)}"
+
+    if insertion.needs_blank_line_before:
+        import_insert = "\n" + import_insert
+
+    if insertion.needs_blank_line_after:
+        import_insert = import_insert + "\n"
+
+    repaired_content = content
+    if insertion.kind == "after_line":
+        repaired_content = _insert_after_line(repaired_content, target_line, import_insert)
+    else:
+        repaired_content = _insert_before_line(repaired_content, target_line, import_insert)
+
+    return {
+        "status": "repaired",
+        "source_module": source_module,
+        "symbols_added": sorted(set(missing_set)),
+        "strategy": "inserted_new_from_import",
+        "content": _ensure_final_newline(repaired_content),
+        "change": {
+            "path": insertion.path,
+            "change_type": "modified",
+            "content": None,
+            "mode": "operation_based_edit",
+            "operation": "insert_after_line" if insertion.kind == "after_line" else "insert_before_line",
+            "target": target_line,
+            "insert": import_insert,
+        },
+    }
+
+
+def build_test_import_repair_payload(
+    *,
+    test_file: str,
+    source_module: str,
+    repair_results: list[dict],
+) -> dict:
+    repaired_results = [result for result in repair_results if result.get("status") == "repaired"]
+    if not repaired_results:
+        all_symbols = sorted(
+            {
+                symbol
+                for result in repair_results
+                for symbol in result.get("symbols", [])
+            }
+        )
+        reason = repair_results[0].get("reason", "not_repairable") if repair_results else "not_repairable"
+        return {
+            "status": "not_repairable",
+            "reason": reason,
+            "source_module": source_module,
+            "test_file": test_file,
+            "symbols": all_symbols,
+            "symbols_added": [],
+        }
+
+    symbols_added = sorted(
+        {
+            symbol
+            for result in repaired_results
+            for symbol in result.get("symbols_added", [])
+        }
+    )
+    strategy = repaired_results[0].get("strategy", "updated_existing_from_import")
+    return {
+        "status": "repaired",
+        "source_module": source_module,
+        "test_file": test_file,
+        "symbols_added": symbols_added,
+        "strategy": strategy,
+    }
+
+
+def repair_unittest_method_indentation(*, content: str, test_file: str) -> dict:
+    normalized_content = content.replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalized_content.splitlines(keepends=True)
+    method_starts = [index for index, line in enumerate(lines) if _unittest_method_header(line) is not None]
+
+    if not method_starts:
+        return {
+            "status": "not_repairable",
+            "reason": "no_unittest_test_methods",
+            "test_file": test_file,
+            "strategy": "normalize_unittest_method_indentation",
+            "methods_repaired": [],
+        }
+
+    if any(line.strip() for line in lines[: method_starts[0]]):
+        return {
+            "status": "not_repairable",
+            "reason": "complex_nested_structure",
+            "test_file": test_file,
+            "strategy": "normalize_unittest_method_indentation",
+            "methods_repaired": [],
+        }
+
+    repaired_lines: list[str] = []
+    methods_repaired: list[str] = []
+    cursor = 0
+
+    for index, start in enumerate(method_starts):
+        end = method_starts[index + 1] if index + 1 < len(method_starts) else len(lines)
+        repaired_lines.extend(lines[cursor:start])
+        block_result = _normalize_unittest_method_block(lines=lines[start:end], test_file=test_file)
+
+        if block_result is None:
+            return {
+                "status": "not_repairable",
+                "reason": "complex_nested_structure",
+                "test_file": test_file,
+                "strategy": "normalize_unittest_method_indentation",
+                "methods_repaired": [],
+            }
+
+        repaired_lines.extend(block_result["lines"])
+        methods_repaired.extend(block_result["methods_repaired"])
+        cursor = end
+
+    if any(line.strip() for line in lines[cursor:]):
+        return {
+            "status": "not_repairable",
+            "reason": "complex_nested_structure",
+            "test_file": test_file,
+            "strategy": "normalize_unittest_method_indentation",
+            "methods_repaired": [],
+        }
+
+    repaired_lines.extend(lines[cursor:])
+
+    return {
+        "status": "repaired",
+        "test_file": test_file,
+        "strategy": "normalize_unittest_method_indentation",
+        "methods_repaired": methods_repaired,
+        "content": "".join(repaired_lines),
+    }
+
+
 def _is_test_name(name: str) -> bool:
     return name.startswith("test_") or name == "test"
+
+
+def _normalize_unittest_method_block(*, lines: list[str], test_file: str) -> dict | None:
+    if not lines:
+        return None
+
+    header = lines[0]
+    match = _unittest_method_header(header)
+
+    if match is None:
+        return None
+
+    header_indent = len(header) - len(header.lstrip(" "))
+    method_name = match.group(2)
+    delta = 4 - header_indent
+    normalized_lines: list[str] = []
+
+    for line in lines:
+        if not line.strip():
+            normalized_lines.append(line)
+            continue
+
+        if "\t" in line:
+            return None
+
+        leading_spaces = len(line) - len(line.lstrip(" "))
+        if leading_spaces < header_indent and _unittest_method_header(line) is None:
+            return None
+
+        new_indent = leading_spaces + delta
+        if new_indent < 0:
+            return None
+
+        normalized_lines.append((" " * new_indent) + line[leading_spaces:])
+
+    return {
+        "lines": normalized_lines,
+        "methods_repaired": [method_name],
+    }
+
+
+def _unittest_method_header(line: str) -> re.Match[str] | None:
+    return re.match(r"^([ ]*)def (test_[A-Za-z_][A-Za-z0-9_]*)\s*\(", line)
 
 
 def _imports_unittest(tree: ast.Module) -> bool:
@@ -230,6 +509,104 @@ def _nested_test_functions(tree: ast.Module) -> list[str]:
             visit_function(node)
 
     return sorted(set(nested))
+
+
+def _find_simple_source_import(
+    tree: ast.Module,
+    source_module: str,
+    *,
+    test_file: str,
+    content: str,
+) -> SimpleImportInfo | None:
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.module != source_module:
+            continue
+        if node.level != 0:
+            continue
+        if node.names and any(alias.asname for alias in node.names):
+            return None
+        if getattr(node, "end_lineno", node.lineno) != node.lineno:
+            return None
+        if any(alias.name == "*" for alias in node.names):
+            return None
+
+        return SimpleImportInfo(
+            path=test_file,
+            text=_line_text(content, node.lineno),
+            names=list(node.names),
+        )
+
+    return None
+
+
+def _existing_import_names(simple_import: SimpleImportInfo | None) -> set[str]:
+    if simple_import is None:
+        return set()
+    return {alias.asname or alias.name for alias in simple_import.names}
+
+
+def _find_import_insertion_point(*, tree: ast.Module, content: str, test_file: str) -> ImportInsertionPoint | None:
+    docstring_end = 0
+    insert_after_line = None
+    insert_before_line = None
+
+    if tree.body and isinstance(tree.body[0], ast.Expr) and isinstance(tree.body[0].value, ast.Constant) and isinstance(tree.body[0].value.value, str):
+        docstring_end = getattr(tree.body[0], "end_lineno", tree.body[0].lineno)
+
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            insert_after_line = getattr(node, "end_lineno", node.lineno)
+            continue
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            insert_before_line = node.lineno
+            break
+
+    if insert_after_line is not None:
+        return ImportInsertionPoint(
+            path=test_file,
+            kind="after_line",
+            target_line=_line_text(content, insert_after_line),
+            needs_blank_line_before=False,
+            needs_blank_line_after=True,
+        )
+
+    if insert_before_line is not None:
+        return ImportInsertionPoint(
+            path=test_file,
+            kind="before_line",
+            target_line=_line_text(content, insert_before_line),
+            needs_blank_line_before=docstring_end > 0,
+            needs_blank_line_after=True,
+        )
+
+    return None
+
+
+def _insert_after_line(content: str, target: str, insert: str) -> str:
+    lines = content.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if line.rstrip("\r\n") == target.rstrip("\r\n"):
+            insert_lines = _ensure_final_newline(insert).splitlines(keepends=True)
+            return "".join(lines[: index + 1] + insert_lines + lines[index + 1 :])
+    raise DiffError(f"Could not locate import insertion point: {target}")
+
+
+def _insert_before_line(content: str, target: str, insert: str) -> str:
+    lines = content.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if line.rstrip("\r\n") == target.rstrip("\r\n"):
+            insert_lines = _ensure_final_newline(insert).splitlines(keepends=True)
+            return "".join(lines[:index] + insert_lines + lines[index:])
+    raise DiffError(f"Could not locate import insertion point: {target}")
+
+
+def _line_text(content: str, line_number: int) -> str:
+    lines = content.splitlines()
+    if line_number <= 0 or line_number > len(lines):
+        return ""
+    return lines[line_number - 1]
 
 
 def _is_self_assert_call(node: ast.AST) -> bool:

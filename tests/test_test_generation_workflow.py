@@ -118,6 +118,81 @@ class TestGenerationWorkflowTests(unittest.TestCase):
             self.assertEqual(repair["status"], "repaired")
             self.assertIn("test_import_repair.json", result.artifacts["import_repair"])
 
+    def test_unittest_method_repair_runs_before_import_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo_with_power_and_sqrt(Path(temporary_directory))
+            tests_dir = root / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_calculator.py").write_text(
+                "import unittest\n"
+                "from calculator import add, divide, multiply, sqrt, subtract\n\n\n"
+                "class TestCalculator(unittest.TestCase):\n"
+                "    def test_add(self):\n"
+                "        self.assertEqual(add(2, 3), 5)\n",
+                encoding="utf-8",
+            )
+            provider = _FakeProvider(
+                _create_unittest_append_method_response(
+                    insert=(
+                        "\n\n        def test_power_negative_exponent(self):\n"
+                        "            self.assertAlmostEqual(power(2, -3), 0.125)\n\n"
+                        "        def test_power_zero_exponent(self):\n"
+                        "            self.assertEqual(power(2, 0), 1)\n"
+                        "    def test_power_positive_exponent(self):\n"
+                        "        self.assertEqual(power(2, 3), 8)\n"
+                    )
+                )
+            )
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="power",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=False,
+                    keep_sandbox=False,
+                    max_generation_retries=1,
+                    max_structure_retries=1,
+                    max_sandbox_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertEqual(result.status, "test_diff_validated")
+            self.assertEqual(provider.call_count, 1)
+            session_dir = result.session_path
+            repair = _read_json(session_dir / "test_unittest_method_repair.json")
+            import_repair = _read_json(session_dir / "test_import_repair.json")
+            metadata = _read_json(session_dir / "test_generation_metadata.json")
+            summary = (session_dir / "test_generation_summary.md").read_text(encoding="utf-8")
+            patch_text = (session_dir / "test_diff.patch").read_text(encoding="utf-8")
+
+            self.assertEqual(repair["status"], "repaired")
+            self.assertEqual(repair["strategy"], "normalize_unittest_method_indentation")
+            self.assertEqual(
+                repair["methods_repaired"],
+                [
+                    "test_power_negative_exponent",
+                    "test_power_zero_exponent",
+                    "test_power_positive_exponent",
+                ],
+            )
+            self.assertEqual(import_repair["status"], "repaired")
+            self.assertEqual(metadata["test_unittest_method_repair"]["status"], "repaired")
+            self.assertEqual(metadata["test_import_repair"]["status"], "repaired")
+            self.assertIn("## Unittest method repair", summary)
+            self.assertIn("Status: repaired", summary)
+            self.assertIn("test_power_positive_exponent", summary)
+            self.assertIn("    def test_power_negative_exponent(self):", patch_text)
+            self.assertIn("from calculator import add, divide, multiply, power, sqrt, subtract", patch_text)
+
     def test_structure_retry_is_used(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = _sample_repo(Path(temporary_directory))
@@ -624,6 +699,34 @@ def _sample_repo_with_power(root: Path) -> Path:
     return root
 
 
+def _sample_repo_with_sqrt(root: Path) -> Path:
+    root = _sample_repo(root)
+    content = (root / "calculator.py").read_text(encoding="utf-8")
+    (root / "calculator.py").write_text(
+        content
+        + "\n\ndef sqrt(value):\n"
+        + "    if value < 0:\n"
+        + "        raise ValueError('negative value')\n"
+        + "    return value ** 0.5\n",
+        encoding="utf-8",
+    )
+    _git(root, ["add", "calculator.py"])
+    _git(root, ["commit", "-m", "add sqrt"])
+    return root
+
+
+def _sample_repo_with_power_and_sqrt(root: Path) -> Path:
+    root = _sample_repo_with_sqrt(root)
+    content = (root / "calculator.py").read_text(encoding="utf-8")
+    (root / "calculator.py").write_text(
+        content + "\n\ndef power(base, exponent):\n    return base ** exponent\n",
+        encoding="utf-8",
+    )
+    _git(root, ["add", "calculator.py"])
+    _git(root, ["commit", "-m", "add power"])
+    return root
+
+
 def _create_test_file_response() -> str:
     return json.dumps(
         {
@@ -717,6 +820,22 @@ def _create_missing_imports_repairable_response() -> str:
                         "    def test_subtraction(self):\n"
                         "        self.assertEqual(subtract(5, 2), 3)\n"
                     ),
+                }
+            ]
+        }
+    )
+
+
+def _create_unittest_append_method_response(*, insert: str) -> str:
+    return json.dumps(
+        {
+            "changes": [
+                {
+                    "path": "tests/test_calculator.py",
+                    "change_type": "modified",
+                    "mode": "operation_based_edit",
+                    "operation": "append_to_file",
+                    "insert": insert,
                 }
             ]
         }

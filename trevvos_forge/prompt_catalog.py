@@ -730,6 +730,9 @@ Rules:
 - If no test style exists, use unittest to avoid adding external dependencies.
 - The existing test file uses unittest when Detected framework is unittest.
 - Add new unittest tests as methods inside a unittest.TestCase class.
+- For unittest files with an existing unittest.TestCase class, prefer replace_block of the whole TestCase class when adding methods.
+- If you use append_to_file inside a unittest.TestCase class, every new def test_* line must start with exactly 4 spaces and every method body line must start with exactly 8 spaces.
+- Never nest def test_* inside another test method.
 - Do not add top-level pytest-style test functions when the file uses unittest.
 - Do not use self outside TestCase methods.
 - The existing test file uses pytest when Detected framework is pytest.
@@ -855,9 +858,11 @@ Rules:
 - Never modify production source files.
 - Do not remove or rewrite existing tests.
 - If the existing test file uses unittest, add new tests as methods inside unittest.TestCase.
+- For unittest files with an existing unittest.TestCase class, prefer replace_block of the whole TestCase class when adding methods.
+- If you use append_to_file inside a unittest.TestCase class, every new def test_* line must start with exactly 4 spaces and every method body line must start with exactly 8 spaces.
+- Never nest def test_* inside another test method.
 - Do not add top-level pytest-style test functions when the file uses unittest.
 - Do not use self outside TestCase methods.
-- Do not nest test functions.
 - Import every production symbol used.
 - If the existing test file uses pytest, use top-level test functions with plain assert or pytest.raises.
 - Do not use self.assertEqual or self.assertRaises in top-level pytest functions.
@@ -894,6 +899,9 @@ Rules:
 - Tests must match current source behavior.
 - If the source function is a simple wrapper around an operator, test the observable result.
 - If an edge case behavior is ambiguous, avoid that assertion or mark it as a suggestion in summary, not as a failing test.
+- For unittest files with an existing unittest.TestCase class, prefer replace_block of the whole TestCase class when adding methods.
+- If you use append_to_file inside a unittest.TestCase class, every new def test_* line must start with exactly 4 spaces and every method body line must start with exactly 8 spaces.
+- Never nest def test_* inside another test method.
 - Use only allowed operation_based_edit operations:
   - append_to_file
   - create_file

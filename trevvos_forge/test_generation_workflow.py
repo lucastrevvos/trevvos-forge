@@ -235,7 +235,23 @@ def run_tests_add_workflow(
             file_changes = parse_file_changes_output(raw_response)
             validate_file_changes_are_tests_only(file_changes)
             break
-        except FileChangeOutputError as exc:
+        except (WorkspaceError, DiffError) as exc:
+            generation_error = _build_generation_guardrail_error_payload(exc, raw_response)
+            write_session_json(session, "test_generation_validation.json", generation_error)
+            return _build_generation_guardrail_failure_result(
+                session=session,
+                target=target,
+                prompt_template_ref=prompt_template.ref,
+                original_symbols=original_symbols,
+                existing_tests_check=existing_tests_check,
+                generation_retries=generation_retries,
+                guardrail_error=generation_error,
+                write=request.write,
+                command_text=command_text,
+            )
+        except Exception as exc:
+            if not _is_generation_schema_error(exc):
+                raise
             generation_error = _build_generation_error_payload(exc, raw_response)
             _write_generation_error_artifacts(session, generation_error)
 
@@ -275,7 +291,23 @@ def run_tests_add_workflow(
                 write_session_json(session, "test_generation_schema_retry_raw_response_parsed.json", raw_response_json(retry_raw_response))
                 file_changes = parse_file_changes_output(retry_raw_response)
                 validate_file_changes_are_tests_only(file_changes)
-            except FileChangeOutputError as retry_exc:
+            except (WorkspaceError, DiffError) as retry_guardrail_exc:
+                generation_error = _build_generation_guardrail_error_payload(retry_guardrail_exc, retry_raw_response)
+                write_session_json(session, "test_generation_validation.json", generation_error)
+                return _build_generation_guardrail_failure_result(
+                    session=session,
+                    target=target,
+                    prompt_template_ref=prompt_template.ref,
+                    original_symbols=original_symbols,
+                    existing_tests_check=existing_tests_check,
+                    generation_retries=generation_retries,
+                    guardrail_error=generation_error,
+                    write=request.write,
+                    command_text=command_text,
+                )
+            except Exception as retry_exc:
+                if not _is_generation_schema_error(retry_exc):
+                    raise
                 retry_error = _build_generation_error_payload(retry_exc, retry_raw_response)
                 _write_generation_error_artifacts(session, retry_error)
                 retry_metadata = {
@@ -330,20 +362,6 @@ def run_tests_add_workflow(
             )
             generation_retries["status"] = "succeeded_after_retry"
             break
-        except (WorkspaceError, DiffError) as exc:
-            generation_error = _build_generation_guardrail_error_payload(exc, raw_response)
-            write_session_json(session, "test_generation_validation.json", generation_error)
-            return _build_generation_guardrail_failure_result(
-                session=session,
-                target=target,
-                prompt_template_ref=prompt_template.ref,
-                original_symbols=original_symbols,
-                existing_tests_check=existing_tests_check,
-                generation_retries=generation_retries,
-                guardrail_error=generation_error,
-                write=request.write,
-                command_text=command_text,
-            )
 
     assert file_changes is not None
     previous_raw_response = raw_response
@@ -791,6 +809,11 @@ def render_test_add_result(*, result: TestAddResult, json_output: bool, console:
         console.print(json.dumps({**result.metadata, "session_id": result.session_id}, indent=2))
         return
 
+    generation_retries = result.metadata.get("generation_retries", {}) if isinstance(result.metadata, dict) else {}
+    generation_retry_used = int(generation_retries.get("used", 0) or 0)
+    generation_retry_max = int(generation_retries.get("max", 0) or 0)
+    generation_retry_status = generation_retries.get("status")
+
     status = result.status
 
     if result.status == "skipped_existing_tests":
@@ -809,7 +832,27 @@ def render_test_add_result(*, result: TestAddResult, json_output: bool, console:
 
     if result.status == "failed_test_generation_schema":
         console.print(result.message)
+        error_path = result.session_path / "test_generation_error.json"
+        if error_path.exists():
+            try:
+                error_payload = json.loads(error_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                error_payload = {}
+            error_type = error_payload.get("error_type", "unknown")
+            operation = error_payload.get("operation")
+            if operation:
+                console.print(f"Schema error: {error_type} ({operation})")
+            else:
+                console.print(f"Schema error: {error_type}")
+        if generation_retry_used > 0:
+            console.print(f"Schema retry used: {generation_retry_used}/{generation_retry_max}")
+            if generation_retry_status == "failed_after_retries":
+                console.print("Test generation schema failed after retry.")
+            elif generation_retry_status == "succeeded_after_retry":
+                console.print("Test generation schema retry succeeded.")
         console.print(f"Review {result.session_path / 'test_generation_error.json'}.")
+        if generation_retry_used > 0:
+            console.print(f"Review {result.session_path / 'test_generation_schema_retry_metadata.json'}.")
         return
 
     if result.status == "failed_test_generation_guardrail":
@@ -840,6 +883,8 @@ def render_test_add_result(*, result: TestAddResult, json_output: bool, console:
     console.print(f"Session: {result.session_id}")
     console.print(f"Status:  {status}")
     console.print(f"Prompt:  {result.prompt_ref}")
+    if generation_retry_used > 0 and generation_retry_status == "succeeded_after_retry":
+        console.print(f"Schema retry used: {generation_retry_used}/{generation_retry_max}")
     console.print("\n[bold]Files changed[/bold]")
     for changed_path in result.files_changed:
         console.print(f"  - {changed_path}")
@@ -870,6 +915,8 @@ def render_test_add_result(*, result: TestAddResult, json_output: bool, console:
         if not result.symbol_selector or not result.symbol_selector.get("enabled", False):
             console.print(f"     symbol selector: disabled ({(result.symbol_selector or {}).get('reason', 'unknown')})")
     console.print("\n[bold]Next[/bold]")
+    if generation_retry_used > 0 and generation_retry_status == "succeeded_after_retry":
+        console.print("  Test generation schema retry succeeded.")
     if result.sandbox_status == "passed":
         console.print(f"  Re-run with `--write` to apply after review, or inspect test_diff.patch.")
     else:
@@ -896,7 +943,22 @@ def _resolve_provider(provider_factory: Callable[[], Provider] | None) -> Provid
     return provider_factory()
 
 
-def _build_generation_error_payload(exc: FileChangeOutputError, raw_response: str) -> dict:
+def _is_generation_schema_error(exc: Exception) -> bool:
+    message = str(exc)
+    return (
+        isinstance(exc, FileChangeOutputError)
+        or "Unknown operation at changes" in message
+        or "Missing or invalid list field: changes" in message
+        or "File changes output must contain at least one change" in message
+        or "full_file_rewrite must be used as mode with content" in message
+        or "The model returned invalid JSON for file changes" in message
+        or "does not contain a valid JSON object" in message
+        or "Missing or invalid string field: changes[" in message
+        or "Invalid item at changes[" in message
+    )
+
+
+def _build_generation_error_payload(exc: Exception, raw_response: str) -> dict:
     message = str(exc)
     payload: dict[str, Any] = {
         "status": "failed",
@@ -907,7 +969,7 @@ def _build_generation_error_payload(exc: FileChangeOutputError, raw_response: st
         "suggested_resolution": "Return only valid JSON with a top-level changes list.",
     }
 
-    unknown_match = re.search(r"^Unknown operation at changes\[(\d+)\]\.operation: ([^.]+)\.", message)
+    unknown_match = re.search(r"Unknown operation at changes\[(\d+)\]\.operation:\s*([^.]+)\.", message)
     if unknown_match:
         operation = unknown_match.group(2).strip()
         payload.update(

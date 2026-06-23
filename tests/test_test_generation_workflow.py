@@ -181,7 +181,7 @@ class TestGenerationWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = _sample_repo(Path(temporary_directory))
             provider = _FakeProvider([
-                _create_unknown_operation_response(),
+                _create_unknown_operation_response("insert_at_position"),
                 _create_test_file_response(),
             ])
 
@@ -216,7 +216,7 @@ class TestGenerationWorkflowTests(unittest.TestCase):
             summary = (result.session_path / "test_generation_summary.md").read_text(encoding="utf-8")
 
             self.assertEqual(error["error_type"], "unknown_operation")
-            self.assertEqual(error["operation"], "replace_in_file")
+            self.assertEqual(error["operation"], "insert_at_position")
             self.assertEqual(metadata["generation_retries"]["max"], 1)
             self.assertEqual(metadata["generation_retries"]["used"], 1)
             self.assertEqual(metadata["generation_retries"]["status"], "succeeded_after_retry")
@@ -226,7 +226,7 @@ class TestGenerationWorkflowTests(unittest.TestCase):
     def test_schema_retry_zero_disables_retry(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = _sample_repo(Path(temporary_directory))
-            provider = _FakeProvider(_create_unknown_operation_response())
+            provider = _FakeProvider(_create_unknown_operation_response("insert_at_position"))
 
             result = run_tests_add_workflow(
                 TestAddRequest(
@@ -260,7 +260,7 @@ class TestGenerationWorkflowTests(unittest.TestCase):
     def test_schema_retry_fails_after_exhausting_limit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = _sample_repo(Path(temporary_directory))
-            provider = _FakeProvider(_create_unknown_operation_response())
+            provider = _FakeProvider(_create_unknown_operation_response("insert_at_position"))
 
             result = run_tests_add_workflow(
                 TestAddRequest(
@@ -321,11 +321,44 @@ class TestGenerationWorkflowTests(unittest.TestCase):
             self.assertEqual(result.status, "test_diff_validated")
             prompt = (result.session_path / "test_generation_schema_retry_prompt.md").read_text(encoding="utf-8")
             self.assertIn("replace_in_file is not a valid operation", prompt)
+            self.assertIn("insert_at_position", prompt)
             self.assertIn("replace_exact_text", prompt)
             self.assertIn("replace_block", prompt)
             self.assertIn("append_to_file", prompt)
             self.assertIn("create_file", prompt)
             self.assertIn("Return only valid JSON", prompt)
+
+    def test_unknown_operation_classification_handles_multiple_operations(self) -> None:
+        for operation in ["replace_in_file", "insert_at_position", "insert_after_block"]:
+            with self.subTest(operation=operation):
+                with tempfile.TemporaryDirectory() as temporary_directory:
+                    root = _sample_repo(Path(temporary_directory))
+                    provider = _FakeProvider(_create_unknown_operation_response(operation))
+
+                    result = run_tests_add_workflow(
+                        TestAddRequest(
+                            repo_root=root,
+                            source_path="calculator.py",
+                            symbol="divide",
+                            all_symbols=False,
+                            test_file=None,
+                            unit=False,
+                            e2e=False,
+                            write=False,
+                            yes=False,
+                            force=False,
+                            keep_sandbox=False,
+                            max_generation_retries=0,
+                            max_structure_retries=1,
+                            timeout=120,
+                        ),
+                        provider,
+                    )
+
+                    self.assertEqual(result.status, "failed_test_generation_schema")
+                    error = _read_json(result.session_path / "test_generation_error.json")
+                    self.assertEqual(error["error_type"], "unknown_operation")
+                    self.assertEqual(error["operation"], operation)
 
     def test_schema_retry_does_not_run_for_guardrail_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -355,6 +388,7 @@ class TestGenerationWorkflowTests(unittest.TestCase):
             self.assertEqual(result.status, "failed_test_generation_guardrail")
             self.assertEqual(provider.call_count, 1)
             self.assertFalse((result.session_path / "test_generation_schema_retry_prompt.md").exists())
+            self.assertEqual(result.metadata["status"], "failed_test_generation_guardrail")
 
     def test_schema_retry_does_not_run_for_structure_validation_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -390,7 +424,7 @@ class TestGenerationWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = _sample_repo(Path(temporary_directory))
             provider = _FakeProvider([
-                _create_unknown_operation_response(),
+                _create_unknown_operation_response("insert_at_position"),
                 _create_test_file_response(),
             ])
 
@@ -573,7 +607,7 @@ def _create_failing_test_file_response() -> str:
     )
 
 
-def _create_unknown_operation_response() -> str:
+def _create_unknown_operation_response(operation: str = "replace_in_file") -> str:
     return json.dumps(
         {
             "changes": [
@@ -581,7 +615,7 @@ def _create_unknown_operation_response() -> str:
                     "path": "tests/test_calculator.py",
                     "change_type": "created",
                     "mode": "operation_based_edit",
-                    "operation": "replace_in_file",
+                    "operation": operation,
                     "content": "irrelevant",
                 }
             ]

@@ -814,13 +814,17 @@ Rules:
   - replace_exact_text
 - Never use:
   - replace_in_file
+  - insert_at_position
+  - insert_at_index
+  - insert_at_line_number
   - insert_after_block
   - edit_file
   - patch_file
   - update_file
   - full_file_rewrite as operation
 - If replacing text, use replace_exact_text or replace_block.
-- If adding tests to an existing file, prefer append_to_file or replace_block.
+- If adding tests to an existing test file, prefer append_to_file.
+- If replacing an import line, use replace_exact_text or replace_block.
 - If creating a new test file, use create_file.
 - Return ONLY valid JSON with top-level "changes".
 - Do not use Markdown.

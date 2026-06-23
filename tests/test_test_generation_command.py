@@ -1407,7 +1407,29 @@ class TestsAddCommandTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("test_generation_schema_retry", result.output)
         self.assertIn("replace_in_file", result.output.lower())
+        self.assertIn("insert_at_position", result.output.lower())
         self.assertIn("Return ONLY valid JSON", result.output)
+
+    def test_schema_retry_cli_output_mentions_retry(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider([
+                _create_unknown_operation_response("insert_at_position"),
+                _create_test_file_response(),
+            ])
+
+            with patch("trevvos_forge.cli.build_provider", return_value=provider):
+                result = runner.invoke(
+                    app,
+                    ["tests", "add", "calculator.py", "--symbol", "divide", "--path", str(root)],
+                )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("Schema retry used: 1/1", result.output)
+            self.assertIn("Test generation schema retry succeeded.", result.output)
+            self.assertNotIn("Unknown operation at changes", result.output)
 
     def test_json_output(self) -> None:
         runner = CliRunner()
@@ -1681,6 +1703,22 @@ def _create_bad_structure_test_file_response() -> str:
                         "    def test_add_mixed_numbers():\n"
                         "        self.assertEqual(add(-1, 2), 1)\n"
                     ),
+                }
+            ]
+        }
+    )
+
+
+def _create_unknown_operation_response(operation: str = "replace_in_file") -> str:
+    return json.dumps(
+        {
+            "changes": [
+                {
+                    "path": "tests/test_calculator.py",
+                    "change_type": "created",
+                    "mode": "operation_based_edit",
+                    "operation": operation,
+                    "content": "irrelevant",
                 }
             ]
         }

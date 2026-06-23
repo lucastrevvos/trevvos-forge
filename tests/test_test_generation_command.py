@@ -758,7 +758,8 @@ class TestsAddCommandTests(unittest.TestCase):
                 result = runner.invoke(app, ["tests", "add", "calculator.py", "--symbol", "divide", "--path", str(root)])
 
             self.assertEqual(result.exit_code, 1)
-            self.assertIn(TEST_FILE_ERROR, result.output)
+            self.assertIn("Generated test file changes included non-test files.", result.output)
+            self.assertIn("test_generation_validation.json", result.output)
             self.assertFalse((root / "test_diff.patch").exists())
 
     def test_all_rejects_provider_change_outside_tests(self) -> None:
@@ -786,7 +787,8 @@ class TestsAddCommandTests(unittest.TestCase):
                 result = runner.invoke(app, ["tests", "add", "calculator.py", "--all", "--path", str(root)])
 
             self.assertEqual(result.exit_code, 1)
-            self.assertIn(TEST_FILE_ERROR, result.output)
+            self.assertIn("Generated test file changes included non-test files.", result.output)
+            self.assertIn("test_generation_validation.json", result.output)
 
     def test_append_preserves_existing_test_content(self) -> None:
         runner = CliRunner()
@@ -1072,7 +1074,14 @@ class TestsAddCommandTests(unittest.TestCase):
             self.assertEqual(result.exit_code, 1)
             self.assertEqual(provider.call_count, 1)
             session_dir = _only_session(root)
+            metadata = _read_json(session_dir / "test_generation_metadata.json")
+
+            self.assertEqual(metadata["status"], "failed_test_generation_guardrail")
+            self.assertEqual(metadata["generation_retries"]["max"], 1)
+            self.assertEqual(metadata["generation_retries"]["used"], 0)
+            self.assertEqual(metadata["generation_retries"]["status"], "not_needed")
             self.assertFalse((session_dir / "test_generation_retry_prompt.md").exists())
+            self.assertFalse((session_dir / "test_generation_schema_retry_prompt.md").exists())
 
     def test_structure_retry_does_not_run_for_invalid_json(self) -> None:
         runner = CliRunner()
@@ -1088,9 +1097,15 @@ class TestsAddCommandTests(unittest.TestCase):
                 )
 
             self.assertEqual(result.exit_code, 1)
-            self.assertEqual(provider.call_count, 1)
+            self.assertEqual(provider.call_count, 2)
             session_dir = _only_session(root)
-            self.assertFalse((session_dir / "test_generation_retry_prompt.md").exists())
+            metadata = _read_json(session_dir / "test_generation_metadata.json")
+
+            self.assertEqual(metadata["status"], "failed_test_generation_schema")
+            self.assertEqual(metadata["generation_retries"]["max"], 1)
+            self.assertEqual(metadata["generation_retries"]["used"], 1)
+            self.assertEqual(metadata["generation_retries"]["status"], "failed_after_retries")
+            self.assertTrue((session_dir / "test_generation_schema_retry_prompt.md").exists())
 
     def test_write_applies_after_retry_success(self) -> None:
         runner = CliRunner()
@@ -1382,8 +1397,17 @@ class TestsAddCommandTests(unittest.TestCase):
         self.assertIn("--all", result.output)
         self.assertIn("--write", result.output)
         self.assertIn("--force", result.output)
+        self.assertIn("--max-generation-retries", result.output)
         self.assertIn("--max-structure-retries", result.output)
         self.assertIn("--keep-sandbox", result.output)
+
+    def test_schema_retry_prompt_is_available(self) -> None:
+        result = CliRunner().invoke(app, ["prompts", "show", "test_generation_schema_retry"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("test_generation_schema_retry", result.output)
+        self.assertIn("replace_in_file", result.output.lower())
+        self.assertIn("Return ONLY valid JSON", result.output)
 
     def test_json_output(self) -> None:
         runner = CliRunner()

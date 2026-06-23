@@ -444,13 +444,19 @@ def build_test_generation_summary(
     write: bool,
     status: str,
     existing_tests_check: ExistingTestsCheck | None = None,
+    generation_retries: dict | None = None,
     structure_validation: dict | None = None,
+    import_repair: dict | None = None,
+    structure_retries: dict | None = None,
 ) -> str:
     changed = "\n".join(f"- {path}" for path in files_changed) or "- none"
     symbol = target.symbol.name if target.symbol is not None else "all"
     symbols_targeted = "\n".join(f"- {symbol.name}" for symbol in target.symbols)
     existing_tests_summary = _existing_tests_summary_section(existing_tests_check)
+    generation_retry_summary = _generation_retry_summary_section(generation_retries)
     structure_summary = _structure_validation_summary_section(structure_validation)
+    import_repair_summary = _import_repair_summary_section(import_repair)
+    structure_retry_summary = _structure_retry_summary_section(structure_retries)
     return f"""# Test Generation Summary
 
 Mode: controlled_execution
@@ -470,9 +476,21 @@ Status: {status}
 
 {existing_tests_summary}
 
+## Test generation schema retry
+
+{generation_retry_summary}
+
 ## Test structure validation
 
 {structure_summary}
+
+## Test import repair
+
+{import_repair_summary}
+
+## Structure retry
+
+{structure_retry_summary}
 
 Files changed:
 {changed}
@@ -495,7 +513,10 @@ def metadata_for_target(
     sandbox_command_source: str | None = None,
     symbol_selector: dict | None = None,
     existing_tests_check: ExistingTestsCheck | None = None,
+    generation_retries: dict | None = None,
     structure_validation: dict | None = None,
+    import_repair: dict | None = None,
+    structure_retries: dict | None = None,
     symbols_original: list[str] | None = None,
     provider_called: bool | None = None,
     write_allowed: bool | None = None,
@@ -526,12 +547,34 @@ def metadata_for_target(
             "symbols_missing": existing_tests_check.symbols_missing,
         }
 
+    if generation_retries is not None:
+        metadata["generation_retries"] = {
+            "max": generation_retries.get("max"),
+            "used": generation_retries.get("used"),
+            "status": generation_retries.get("status"),
+        }
+
     if structure_validation is not None:
         metadata["test_structure_validation"] = {
             "status": structure_validation.get("status"),
             "errors": structure_validation.get("errors", []),
             "warnings": structure_validation.get("warnings", []),
             "discovered_tests": structure_validation.get("discovered_tests", []),
+        }
+
+    if import_repair is not None:
+        metadata["test_import_repair"] = {
+            "status": import_repair.get("status"),
+            "symbols_added": import_repair.get("symbols_added", []),
+            "strategy": import_repair.get("strategy"),
+            "reason": import_repair.get("reason"),
+        }
+
+    if structure_retries is not None:
+        metadata["structure_retries"] = {
+            "max": structure_retries.get("max"),
+            "used": structure_retries.get("used"),
+            "status": structure_retries.get("status"),
         }
 
     if provider_called is not None:
@@ -695,6 +738,53 @@ Warnings:
 
 Discovered tests:
 {tests}"""
+
+
+def _import_repair_summary_section(import_repair: dict | None) -> str:
+    if import_repair is None:
+        return "Not run."
+
+    symbols = "\n".join(f"- {symbol}" for symbol in import_repair.get("symbols_added", [])) or "- none"
+    reason = import_repair.get("reason")
+    strategy = import_repair.get("strategy")
+    lines = [
+        f"Status: {import_repair.get('status', 'unknown')}",
+    ]
+    if strategy:
+        lines.append(f"Strategy: {strategy}")
+    if reason:
+        lines.append(f"Reason: {reason}")
+    lines.append("")
+    lines.append("Symbols added:")
+    lines.append(symbols)
+
+    return "\n".join(lines)
+
+
+def _structure_retry_summary_section(structure_retries: dict | None) -> str:
+    if structure_retries is None:
+        return "Not run."
+
+    lines = [
+        f"Max retries: {structure_retries.get('max', 0)}",
+        f"Used: {structure_retries.get('used', 0)}",
+        f"Result: {structure_retries.get('status', 'unknown')}",
+    ]
+
+    return "\n".join(lines)
+
+
+def _generation_retry_summary_section(generation_retries: dict | None) -> str:
+    if generation_retries is None:
+        return "Not run."
+
+    lines = [
+        f"Max retries: {generation_retries.get('max', 0)}",
+        f"Used: {generation_retries.get('used', 0)}",
+        f"Result: {generation_retries.get('status', 'unknown')}",
+    ]
+
+    return "\n".join(lines)
 
 
 def build_tests_inspect_payload(*, source_path: str, check: ExistingTestsCheck) -> dict:

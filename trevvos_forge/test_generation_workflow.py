@@ -10,8 +10,13 @@ from trevvos_forge.apply_patch import apply_patch, check_patch
 from trevvos_forge.commit_workflow import extract_patch_paths
 from trevvos_forge.diff_builder import build_unified_diff_from_file_changes
 from trevvos_forge.diff_validation import validate_diff_patch
-from trevvos_forge.exceptions import DiffError
-from trevvos_forge.file_change_outputs import FileChange, FileChangesOutput, parse_file_changes_output
+from trevvos_forge.exceptions import DiffError, FileChangeOutputError, WorkspaceError
+from trevvos_forge.file_change_outputs import (
+    ALLOWED_OPERATION_BASED_EDIT_OPERATIONS,
+    FileChange,
+    FileChangesOutput,
+    parse_file_changes_output,
+)
 from trevvos_forge.context_builder import content_with_line_numbers
 from trevvos_forge.prompt_catalog import get_prompt
 from trevvos_forge.sessions import (
@@ -47,6 +52,7 @@ from trevvos_forge.workspace import read_workspace_file
 
 
 MAX_TEST_FILE_CHARS = 20_000
+MAX_GENERATION_RETRIES = 3
 
 
 class Provider(Protocol):
@@ -67,6 +73,7 @@ class TestAddRequest:
     yes: bool
     force: bool
     keep_sandbox: bool
+    max_generation_retries: int
     max_structure_retries: int
     timeout: int
 
@@ -218,14 +225,131 @@ def run_tests_add_workflow(
     actual_provider = provider if provider is not None else _resolve_provider(provider_factory)
     raw_response = actual_provider.generate(prompt)
     write_session_text(session, "test_generation_raw_response.json", raw_response)
-    write_session_json(session, "test_generation_raw_response_parsed.json", raw_response_json(raw_response))
+    generation_retries = {"max": request.max_generation_retries, "used": 0, "status": "not_needed"}
+    generation_error: dict | None = None
+    file_changes: FileChangesOutput | None = None
 
-    file_changes = parse_file_changes_output(raw_response)
-    validate_file_changes_are_tests_only(file_changes)
+    while True:
+        try:
+            write_session_json(session, "test_generation_raw_response_parsed.json", raw_response_json(raw_response))
+            file_changes = parse_file_changes_output(raw_response)
+            validate_file_changes_are_tests_only(file_changes)
+            break
+        except FileChangeOutputError as exc:
+            generation_error = _build_generation_error_payload(exc, raw_response)
+            _write_generation_error_artifacts(session, generation_error)
 
+            if generation_retries["used"] >= request.max_generation_retries:
+                generation_retries["status"] = "failed_after_retries"
+                return _build_generation_failure_result(
+                    session=session,
+                    target=target,
+                    prompt_template_ref=prompt_template.ref,
+                    original_symbols=original_symbols,
+                    existing_tests_check=existing_tests_check,
+                    generation_retries=generation_retries,
+                    generation_error=generation_error,
+                    write=request.write,
+                    command_text=command_text,
+                    request=request,
+                )
+
+            attempt = generation_retries["used"] + 1
+            retry_prompt_template = get_prompt("test_generation_schema_retry")
+            retry_context = _build_generation_schema_retry_context(
+                workspace_root=workspace_root,
+                target=target,
+                source_content=content_with_line_numbers(source_content),
+                test_content=content_with_line_numbers(test_content) if test_content is not None else None,
+                existing_tests_check=existing_tests_check,
+                previous_raw_response=raw_response,
+                generation_error=generation_error,
+                force=request.force,
+            )
+            retry_prompt = retry_prompt_template.render(test_generation_schema_retry_context=retry_context)
+            retry_raw_response = actual_provider.generate(retry_prompt)
+            generation_retries["used"] = attempt
+            raw_response = retry_raw_response
+
+            try:
+                write_session_json(session, "test_generation_schema_retry_raw_response_parsed.json", raw_response_json(retry_raw_response))
+                file_changes = parse_file_changes_output(retry_raw_response)
+                validate_file_changes_are_tests_only(file_changes)
+            except FileChangeOutputError as retry_exc:
+                retry_error = _build_generation_error_payload(retry_exc, retry_raw_response)
+                _write_generation_error_artifacts(session, retry_error)
+                retry_metadata = {
+                    "attempt": attempt,
+                    "status": "failed",
+                    "prompt": retry_prompt_template.ref,
+                    "error_type": retry_error["error_type"],
+                    "message": retry_error["message"],
+                    "raw_response_path": "test_generation_schema_retry_raw_response.json"
+                    if attempt == 1
+                    else f"test_generation_schema_retry_{attempt}_raw_response.json",
+                    "error": retry_error,
+                }
+                _write_generation_retry_artifacts(
+                    session=session,
+                    attempt=attempt,
+                    prompt=retry_prompt,
+                    raw_response=retry_raw_response,
+                    metadata=retry_metadata,
+                )
+                generation_error = retry_error
+                if generation_retries["used"] >= request.max_generation_retries:
+                    generation_retries["status"] = "failed_after_retries"
+                    return _build_generation_failure_result(
+                        session=session,
+                        target=target,
+                        prompt_template_ref=prompt_template.ref,
+                        original_symbols=original_symbols,
+                        existing_tests_check=existing_tests_check,
+                        generation_retries=generation_retries,
+                        generation_error=generation_error,
+                        write=request.write,
+                        command_text=command_text,
+                        request=request,
+                    )
+                continue
+
+            retry_metadata = {
+                "attempt": attempt,
+                "status": "succeeded_after_retry",
+                "prompt": retry_prompt_template.ref,
+                "error_type": generation_error["error_type"],
+                "message": generation_error["message"],
+                "file_changes": file_changes.to_dict(),
+            }
+            _write_generation_retry_artifacts(
+                session=session,
+                attempt=attempt,
+                prompt=retry_prompt,
+                raw_response=retry_raw_response,
+                metadata=retry_metadata,
+            )
+            generation_retries["status"] = "succeeded_after_retry"
+            break
+        except (WorkspaceError, DiffError) as exc:
+            generation_error = _build_generation_guardrail_error_payload(exc, raw_response)
+            write_session_json(session, "test_generation_validation.json", generation_error)
+            return _build_generation_guardrail_failure_result(
+                session=session,
+                target=target,
+                prompt_template_ref=prompt_template.ref,
+                original_symbols=original_symbols,
+                existing_tests_check=existing_tests_check,
+                generation_retries=generation_retries,
+                guardrail_error=generation_error,
+                write=request.write,
+                command_text=command_text,
+            )
+
+    assert file_changes is not None
     previous_raw_response = raw_response
     previous_raw_response_parsed = raw_response_json(raw_response)
     current_file_changes = file_changes
+    generation_retries["status"] = "succeeded_after_retry" if generation_retries["used"] > 0 else "not_needed"
     structure_validation = validate_file_changes_test_structure(
         workspace_root=workspace_root,
         file_changes=current_file_changes,
@@ -305,6 +429,7 @@ def run_tests_add_workflow(
             status="failed_test_structure_validation",
             files_changed=files_changed,
             existing_tests_check=existing_tests_check,
+            generation_retries=generation_retries,
             structure_validation=structure_validation,
             import_repair=import_repair,
             structure_retries=structure_retries,
@@ -322,6 +447,7 @@ def run_tests_add_workflow(
                 write=request.write,
                 status="failed_test_structure_validation",
                 existing_tests_check=existing_tests_check,
+                generation_retries=generation_retries,
                 structure_validation=structure_validation,
                 import_repair=import_repair,
                 structure_retries=structure_retries,
@@ -475,6 +601,7 @@ def run_tests_add_workflow(
         sandbox_command_source=command_source,
         symbol_selector=symbol_selector,
         existing_tests_check=existing_tests_check,
+        generation_retries=generation_retries,
         structure_validation=structure_validation,
         import_repair=import_repair,
         structure_retries=structure_retries,
@@ -492,6 +619,7 @@ def run_tests_add_workflow(
             write=request.write,
             status="diff_ready",
             existing_tests_check=existing_tests_check,
+            generation_retries=generation_retries,
             structure_validation=structure_validation,
             import_repair=import_repair,
             structure_retries=structure_retries,
@@ -679,6 +807,16 @@ def render_test_add_result(*, result: TestAddResult, json_output: bool, console:
         console.print(f"Review {result.session_path / 'test_structure_validation.json'}.")
         return
 
+    if result.status == "failed_test_generation_schema":
+        console.print(result.message)
+        console.print(f"Review {result.session_path / 'test_generation_error.json'}.")
+        return
+
+    if result.status == "failed_test_generation_guardrail":
+        console.print(result.message)
+        console.print(f"Review {result.session_path / 'test_generation_validation.json'}.")
+        return
+
     if result.status == "write_blocked":
         console.print(result.message)
         console.print(f"Review {result.session_path / 'test_sandbox_output.log'}.")
@@ -756,6 +894,360 @@ def _resolve_provider(provider_factory: Callable[[], Provider] | None) -> Provid
         raise DiffError("Provider factory is required when a provider instance is not supplied.")
 
     return provider_factory()
+
+
+def _build_generation_error_payload(exc: FileChangeOutputError, raw_response: str) -> dict:
+    message = str(exc)
+    payload: dict[str, Any] = {
+        "status": "failed",
+        "error_type": "schema_invalid",
+        "message": message,
+        "raw_response_path": "test_generation_raw_response.json",
+        "allowed_operations": sorted(ALLOWED_OPERATION_BASED_EDIT_OPERATIONS),
+        "suggested_resolution": "Return only valid JSON with a top-level changes list.",
+    }
+
+    unknown_match = re.search(r"^Unknown operation at changes\[(\d+)\]\.operation: ([^.]+)\.", message)
+    if unknown_match:
+        operation = unknown_match.group(2).strip()
+        payload.update(
+            {
+                "error_type": "unknown_operation",
+                "operation": operation,
+                "suggested_resolution": _suggested_resolution_for_operation(operation),
+            }
+        )
+        return payload
+
+    if "Missing or invalid list field: changes" in message:
+        payload.update(
+            {
+                "error_type": "missing_changes_list",
+                "suggested_resolution": 'Return a JSON object with a top-level "changes" list.',
+            }
+        )
+        return payload
+
+    if "File changes output must contain at least one change" in message:
+        payload.update(
+            {
+                "error_type": "empty_changes_list",
+                "suggested_resolution": 'Return a JSON object with a non-empty top-level "changes" list.',
+            }
+        )
+        return payload
+
+    if "full_file_rewrite must be used as mode with content" in message:
+        payload.update(
+            {
+                "error_type": "invalid_full_file_rewrite_usage",
+                "suggested_resolution": "Use mode full_file_rewrite with content, or use an allowed operation_based_edit operation.",
+            }
+        )
+        return payload
+
+    if "The model returned invalid JSON for file changes" in message or "does not contain a valid JSON object" in message:
+        payload.update(
+            {
+                "error_type": "invalid_json",
+                "suggested_resolution": 'Return only valid JSON with a top-level "changes" list.',
+            }
+        )
+        return payload
+
+    if "Missing or invalid string field: changes[" in message or "Invalid item at changes[" in message:
+        payload.update(
+            {
+                "error_type": "schema_invalid",
+                "suggested_resolution": 'Return a JSON object with a top-level "changes" list and valid file change objects.',
+            }
+        )
+        return payload
+
+    return payload
+
+
+def _build_generation_guardrail_error_payload(exc: Exception, raw_response: str) -> dict:
+    message = str(exc)
+    return {
+        "status": "failed",
+        "error_type": "test_only_validation",
+        "message": message,
+        "raw_response_path": "test_generation_raw_response.json",
+        "suggested_resolution": "Only include test files and keep production files unchanged.",
+        "raw_response": raw_response,
+    }
+
+
+def _suggested_resolution_for_operation(operation: str) -> str:
+    if operation == "replace_in_file":
+        return (
+            "replace_in_file is not a valid operation. Use replace_exact_text or replace_block for replacements, "
+            "append_to_file for appending tests, or create_file for new test files."
+        )
+
+    return (
+        f"{operation} is not a valid operation. Use append_to_file, create_file, insert_after_heading, "
+        "insert_after_line, insert_before_line, replace_block, or replace_exact_text."
+    )
+
+
+def _build_generation_schema_retry_context(
+    *,
+    workspace_root: Path,
+    target: TestGenerationTarget,
+    source_content: str,
+    test_content: str | None,
+    existing_tests_check: ExistingTestsCheck,
+    previous_raw_response: str,
+    generation_error: dict,
+    force: bool,
+) -> str:
+    prompt_context = build_test_generation_context(
+        workspace_root=workspace_root,
+        target=target,
+        source_content=source_content,
+        test_content=test_content,
+        existing_tests_check=existing_tests_check,
+        force=force,
+    )
+    allowed_operations = "\n".join(f"- {operation}" for operation in sorted(ALLOWED_OPERATION_BASED_EDIT_OPERATIONS))
+    return f"""{prompt_context}
+
+Previous raw response:
+{previous_raw_response}
+
+Structured error:
+{json.dumps(generation_error, indent=2, ensure_ascii=False)}
+
+Allowed operations:
+{allowed_operations}
+"""
+
+
+def _write_generation_error_artifacts(session: ForgeSession, error_payload: dict) -> None:
+    write_session_json(session, "test_generation_error.json", error_payload)
+    write_session_text(session, "test_generation_error.md", _render_generation_error_markdown(error_payload))
+
+
+def _render_generation_error_markdown(error_payload: dict) -> str:
+    allowed_operations = error_payload.get("allowed_operations", [])
+    allowed_lines = "\n".join(f"- {operation}" for operation in allowed_operations) or "- none"
+    return f"""# Test Generation Error
+
+- status: {error_payload.get("status", "failed")}
+- error_type: {error_payload.get("error_type", "unknown")}
+- message: {error_payload.get("message", "unknown")}
+- operation: {error_payload.get("operation", "n/a")}
+- suggested_resolution: {error_payload.get("suggested_resolution", "n/a")}
+- raw_response_path: {error_payload.get("raw_response_path", "test_generation_raw_response.json")}
+
+## Allowed operations
+
+{allowed_lines}
+"""
+
+
+def _write_generation_retry_artifacts(
+    *,
+    session: ForgeSession,
+    attempt: int,
+    prompt: str,
+    raw_response: str,
+    metadata: dict,
+) -> None:
+    if attempt == 1:
+        write_session_text(session, "test_generation_schema_retry_prompt.md", prompt)
+        write_session_text(session, "test_generation_schema_retry_raw_response.json", raw_response)
+        write_session_json(session, "test_generation_schema_retry_metadata.json", metadata)
+
+    prefix = f"test_generation_schema_retry_{attempt}"
+    write_session_text(session, f"{prefix}_prompt.md", prompt)
+    write_session_text(session, f"{prefix}_raw_response.json", raw_response)
+    write_session_json(session, f"{prefix}_metadata.json", metadata)
+
+
+def _build_generation_failure_result(
+    *,
+    session: ForgeSession,
+    target: TestGenerationTarget,
+    prompt_template_ref: str,
+    original_symbols: list[str],
+    existing_tests_check: ExistingTestsCheck,
+    generation_retries: dict,
+    generation_error: dict,
+    write: bool,
+    command_text: str,
+    request: TestAddRequest,
+) -> TestAddResult:
+    metadata = metadata_for_target(
+        target=target,
+        write=write,
+        prompt_ref=prompt_template_ref,
+        status="failed_test_generation_schema",
+        files_changed=[],
+        existing_tests_check=existing_tests_check,
+        generation_retries=generation_retries,
+        symbols_original=original_symbols,
+        provider_called=True,
+        write_allowed=False,
+    )
+    write_session_json(session, "test_generation_metadata.json", metadata)
+    write_session_text(
+        session,
+        "test_generation_summary.md",
+        build_test_generation_summary(
+            target=target,
+            files_changed=[],
+            write=write,
+            status="failed_test_generation_schema",
+            existing_tests_check=existing_tests_check,
+            generation_retries=generation_retries,
+        ),
+    )
+    session = update_session_status(session, "tests_add_failed")
+    artifacts = [
+        "test_generation_error.json",
+        "test_generation_error.md",
+        "test_generation_raw_response.json",
+        "test_generation_metadata.json",
+        "test_generation_summary.md",
+    ]
+    if generation_retries["used"] > 0:
+        artifacts.extend(
+            [
+                "test_generation_schema_retry_prompt.md",
+                "test_generation_schema_retry_raw_response.json",
+                "test_generation_schema_retry_metadata.json",
+            ]
+        )
+        artifacts.extend(
+            [
+                "test_generation_schema_retry_1_prompt.md",
+                "test_generation_schema_retry_1_raw_response.json",
+                "test_generation_schema_retry_1_metadata.json",
+            ]
+        )
+        if generation_retries["used"] > 1:
+            for attempt in range(2, generation_retries["used"] + 1):
+                artifacts.extend(
+                    [
+                        f"test_generation_schema_retry_{attempt}_prompt.md",
+                        f"test_generation_schema_retry_{attempt}_raw_response.json",
+                        f"test_generation_schema_retry_{attempt}_metadata.json",
+                    ]
+                )
+    _record_timeline_event(
+        session,
+        "tests_add_failed",
+        command_text,
+        "failed",
+        reason="failed_test_generation_schema",
+        message=generation_error.get("message"),
+        artifacts=artifacts,
+    )
+    return TestAddResult(
+        status="failed_test_generation_schema",
+        session_id=session.metadata.id,
+        session_path=session.path,
+        source_path=target.source_path,
+        test_file=target.test_file,
+        symbols=original_symbols,
+        files_changed=[],
+        write_allowed=False,
+        applied=False,
+        artifacts={
+            "error": "test_generation_error.json",
+            "error_markdown": "test_generation_error.md",
+            "raw_response": "test_generation_raw_response.json",
+            "metadata": "test_generation_metadata.json",
+            "summary": "test_generation_summary.md",
+            **(
+                {"generation_retry": "test_generation_schema_retry_metadata.json"}
+                if generation_retries["used"] > 0
+                else {}
+            ),
+        },
+        message="[red]Generated test file changes failed schema validation.[/red]",
+        exit_code=1,
+        metadata=metadata,
+        prompt_ref=prompt_template_ref,
+        next_command=target.suggested_test_command,
+    )
+
+
+def _build_generation_guardrail_failure_result(
+    *,
+    session: ForgeSession,
+    target: TestGenerationTarget,
+    prompt_template_ref: str,
+    original_symbols: list[str],
+    existing_tests_check: ExistingTestsCheck,
+    generation_retries: dict,
+    guardrail_error: dict,
+    write: bool,
+    command_text: str,
+) -> TestAddResult:
+    metadata = metadata_for_target(
+        target=target,
+        write=write,
+        prompt_ref=prompt_template_ref,
+        status="failed_test_generation_guardrail",
+        files_changed=[],
+        existing_tests_check=existing_tests_check,
+        generation_retries=generation_retries,
+        symbols_original=original_symbols,
+        provider_called=True,
+        write_allowed=False,
+    )
+    write_session_json(session, "test_generation_metadata.json", metadata)
+    write_session_text(
+        session,
+        "test_generation_summary.md",
+        build_test_generation_summary(
+            target=target,
+            files_changed=[],
+            write=write,
+            status="failed_test_generation_guardrail",
+            existing_tests_check=existing_tests_check,
+            generation_retries=generation_retries,
+        ),
+    )
+    session = update_session_status(session, "tests_add_failed")
+    _record_timeline_event(
+        session,
+        "tests_add_failed",
+        command_text,
+        "failed",
+        reason="failed_test_generation_guardrail",
+        message=guardrail_error.get("message"),
+        artifacts=[
+            "test_generation_validation.json",
+            "test_generation_metadata.json",
+            "test_generation_summary.md",
+        ],
+    )
+    return TestAddResult(
+        status="failed_test_generation_guardrail",
+        session_id=session.metadata.id,
+        session_path=session.path,
+        source_path=target.source_path,
+        test_file=target.test_file,
+        symbols=original_symbols,
+        files_changed=[],
+        write_allowed=False,
+        applied=False,
+        artifacts={
+            "validation": "test_generation_validation.json",
+            "metadata": "test_generation_metadata.json",
+            "summary": "test_generation_summary.md",
+        },
+        message="[red]Generated test file changes included non-test files.[/red]",
+        exit_code=1,
+        metadata=metadata,
+        prompt_ref=prompt_template_ref,
+        next_command=target.suggested_test_command,
+    )
 
 
 def _write_test_sandbox_aliases(

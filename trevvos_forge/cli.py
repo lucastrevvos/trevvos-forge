@@ -4526,6 +4526,10 @@ def tests_add(
         int,
         typer.Option("--max-structure-retries", help="Retry test generation after structural validation failure."),
     ] = 1,
+    max_generation_retries: Annotated[
+        int,
+        typer.Option("--max-generation-retries", help="Retry test generation after schema or operation errors."),
+    ] = 1,
     timeout: Annotated[
         int,
         typer.Option("--timeout", help="Timeout per sandbox test command in seconds."),
@@ -4561,6 +4565,8 @@ def tests_add(
             raise DiffError("Specify --symbol <name> or --all.")
         if unit and e2e:
             raise DiffError("Choose only one test type: --unit or --e2e.")
+        if max_generation_retries < 0 or max_generation_retries > 3:
+            raise DiffError("--max-generation-retries must be between 0 and 3.")
         if max_structure_retries < 0 or max_structure_retries > 3:
             raise DiffError("--max-structure-retries must be between 0 and 3.")
 
@@ -4577,6 +4583,7 @@ def tests_add(
             yes=yes,
             force=force,
             keep_sandbox=keep_sandbox,
+            max_generation_retries=max_generation_retries,
             max_structure_retries=max_structure_retries,
             timeout=timeout,
         )

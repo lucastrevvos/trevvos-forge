@@ -30,6 +30,7 @@ class TestGenerationWorkflowTests(unittest.TestCase):
                     yes=False,
                     force=False,
                     keep_sandbox=False,
+                    max_generation_retries=1,
                     max_structure_retries=1,
                     timeout=120,
                 ),
@@ -72,6 +73,7 @@ class TestGenerationWorkflowTests(unittest.TestCase):
                     yes=False,
                     force=False,
                     keep_sandbox=False,
+                    max_generation_retries=1,
                     max_structure_retries=1,
                     timeout=120,
                 ),
@@ -101,6 +103,7 @@ class TestGenerationWorkflowTests(unittest.TestCase):
                     yes=False,
                     force=False,
                     keep_sandbox=False,
+                    max_generation_retries=1,
                     max_structure_retries=1,
                     timeout=120,
                 ),
@@ -130,6 +133,7 @@ class TestGenerationWorkflowTests(unittest.TestCase):
                     yes=False,
                     force=False,
                     keep_sandbox=False,
+                    max_generation_retries=1,
                     max_structure_retries=1,
                     timeout=120,
                 ),
@@ -160,6 +164,7 @@ class TestGenerationWorkflowTests(unittest.TestCase):
                     yes=True,
                     force=False,
                     keep_sandbox=False,
+                    max_generation_retries=1,
                     max_structure_retries=0,
                     timeout=120,
                 ),
@@ -171,6 +176,247 @@ class TestGenerationWorkflowTests(unittest.TestCase):
             self.assertFalse(result.applied)
             self.assertTrue((result.session_path / "test_sandbox_results.json").exists())
             self.assertFalse((result.session_path / "test_apply_result.json").exists())
+
+    def test_schema_retry_recovers_from_unknown_operation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider([
+                _create_unknown_operation_response(),
+                _create_test_file_response(),
+            ])
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="divide",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=False,
+                    keep_sandbox=False,
+                    max_generation_retries=1,
+                    max_structure_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertEqual(result.status, "test_diff_validated")
+            self.assertEqual(provider.call_count, 2)
+            self.assertTrue((result.session_path / "test_generation_error.json").exists())
+            self.assertTrue((result.session_path / "test_generation_schema_retry_prompt.md").exists())
+            self.assertTrue((result.session_path / "test_generation_schema_retry_raw_response.json").exists())
+            self.assertTrue((result.session_path / "test_generation_schema_retry_metadata.json").exists())
+            error = _read_json(result.session_path / "test_generation_error.json")
+            metadata = _read_json(result.session_path / "test_generation_metadata.json")
+            summary = (result.session_path / "test_generation_summary.md").read_text(encoding="utf-8")
+
+            self.assertEqual(error["error_type"], "unknown_operation")
+            self.assertEqual(error["operation"], "replace_in_file")
+            self.assertEqual(metadata["generation_retries"]["max"], 1)
+            self.assertEqual(metadata["generation_retries"]["used"], 1)
+            self.assertEqual(metadata["generation_retries"]["status"], "succeeded_after_retry")
+            self.assertIn("## Test generation schema retry", summary)
+            self.assertIn("Result: succeeded_after_retry", summary)
+
+    def test_schema_retry_zero_disables_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider(_create_unknown_operation_response())
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="divide",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=False,
+                    keep_sandbox=False,
+                    max_generation_retries=0,
+                    max_structure_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertEqual(result.status, "failed_test_generation_schema")
+            self.assertEqual(provider.call_count, 1)
+            self.assertFalse((result.session_path / "test_diff.patch").exists())
+            self.assertFalse((result.session_path / "test_sandbox_results.json").exists())
+            metadata = _read_json(result.session_path / "test_generation_metadata.json")
+            self.assertEqual(metadata["generation_retries"]["max"], 0)
+            self.assertEqual(metadata["generation_retries"]["used"], 0)
+            self.assertEqual(metadata["generation_retries"]["status"], "failed_after_retries")
+
+    def test_schema_retry_fails_after_exhausting_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider(_create_unknown_operation_response())
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="divide",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=False,
+                    keep_sandbox=False,
+                    max_generation_retries=1,
+                    max_structure_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertEqual(result.status, "failed_test_generation_schema")
+            self.assertEqual(provider.call_count, 2)
+            metadata = _read_json(result.session_path / "test_generation_metadata.json")
+            self.assertEqual(metadata["generation_retries"]["max"], 1)
+            self.assertEqual(metadata["generation_retries"]["used"], 1)
+            self.assertEqual(metadata["generation_retries"]["status"], "failed_after_retries")
+            self.assertTrue((result.session_path / "test_generation_schema_retry_prompt.md").exists())
+
+    def test_schema_retry_prompt_contains_error_and_allowed_operations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider([
+                _create_unknown_operation_response(),
+                _create_test_file_response(),
+            ])
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="divide",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=False,
+                    keep_sandbox=False,
+                    max_generation_retries=1,
+                    max_structure_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertEqual(result.status, "test_diff_validated")
+            prompt = (result.session_path / "test_generation_schema_retry_prompt.md").read_text(encoding="utf-8")
+            self.assertIn("replace_in_file is not a valid operation", prompt)
+            self.assertIn("replace_exact_text", prompt)
+            self.assertIn("replace_block", prompt)
+            self.assertIn("append_to_file", prompt)
+            self.assertIn("create_file", prompt)
+            self.assertIn("Return only valid JSON", prompt)
+
+    def test_schema_retry_does_not_run_for_guardrail_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider(_create_production_file_change_response())
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="divide",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=False,
+                    keep_sandbox=False,
+                    max_generation_retries=1,
+                    max_structure_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertEqual(result.status, "failed_test_generation_guardrail")
+            self.assertEqual(provider.call_count, 1)
+            self.assertFalse((result.session_path / "test_generation_schema_retry_prompt.md").exists())
+
+    def test_schema_retry_does_not_run_for_structure_validation_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider(_create_structure_retry_bad_response())
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol=None,
+                    all_symbols=True,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=False,
+                    keep_sandbox=False,
+                    max_generation_retries=1,
+                    max_structure_retries=0,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertEqual(result.status, "tests_add_failed")
+            self.assertEqual(provider.call_count, 1)
+            self.assertTrue((result.session_path / "test_structure_validation.json").exists())
+            self.assertFalse((result.session_path / "test_generation_schema_retry_prompt.md").exists())
+
+    def test_schema_retry_write_applies_after_success(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = _sample_repo(Path(temporary_directory))
+            provider = _FakeProvider([
+                _create_unknown_operation_response(),
+                _create_test_file_response(),
+            ])
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="divide",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=True,
+                    yes=True,
+                    force=False,
+                    keep_sandbox=False,
+                    max_generation_retries=1,
+                    max_structure_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertEqual(result.status, "tests_applied")
+            self.assertTrue((root / "tests" / "test_calculator.py").exists())
+            self.assertTrue((result.session_path / "test_apply_result.json").exists())
 
     def test_cli_delegates_to_workflow(self) -> None:
         runner = CliRunner()
@@ -321,6 +567,38 @@ def _create_failing_test_file_response() -> str:
                         "    def test_failure(self):\n"
                         "        self.assertEqual(1, 2)\n"
                     ),
+                }
+            ]
+        }
+    )
+
+
+def _create_unknown_operation_response() -> str:
+    return json.dumps(
+        {
+            "changes": [
+                {
+                    "path": "tests/test_calculator.py",
+                    "change_type": "created",
+                    "mode": "operation_based_edit",
+                    "operation": "replace_in_file",
+                    "content": "irrelevant",
+                }
+            ]
+        }
+    )
+
+
+def _create_production_file_change_response() -> str:
+    return json.dumps(
+        {
+            "changes": [
+                {
+                    "path": "calculator.py",
+                    "change_type": "modified",
+                    "mode": "operation_based_edit",
+                    "operation": "append_to_file",
+                    "insert": "\n# bad\n",
                 }
             ]
         }

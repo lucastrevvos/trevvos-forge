@@ -787,6 +787,50 @@ Test generation context:
 {test_generation_context}
 """,
     ),
+    "test_generation_schema_retry": PromptTemplate(
+        name="test_generation_schema_retry",
+        version="1.0.0",
+        description="Retries controlled test-only file_changes JSON after schema or operation errors.",
+        template="""You are Trevvos Forge in Controlled Execution: test files only.
+
+You are retrying because the previous response returned invalid file_changes JSON.
+Fix only the test file changes.
+Do not modify production code.
+Preserve existing tests.
+Do not duplicate existing tests.
+Return only valid JSON with top-level "changes".
+
+Rules:
+- Only create or modify test files.
+- Never modify production source files.
+- Do not remove or rewrite existing tests.
+- Use only allowed operation_based_edit operations:
+  - append_to_file
+  - create_file
+  - insert_after_heading
+  - insert_after_line
+  - insert_before_line
+  - replace_block
+  - replace_exact_text
+- Never use:
+  - replace_in_file
+  - insert_after_block
+  - edit_file
+  - patch_file
+  - update_file
+  - full_file_rewrite as operation
+- If replacing text, use replace_exact_text or replace_block.
+- If adding tests to an existing file, prefer append_to_file or replace_block.
+- If creating a new test file, use create_file.
+- Return ONLY valid JSON with top-level "changes".
+- Do not use Markdown.
+- Do not use a code block.
+- Do not write text before or after the JSON.
+
+Retry context:
+{test_generation_schema_retry_context}
+""",
+    ),
     "test_generation_retry": PromptTemplate(
         name="test_generation_retry",
         version="1.0.0",

@@ -702,7 +702,7 @@ class TestsAddCommandTests(unittest.TestCase):
                 )
 
             self.assertEqual(result.exit_code, 1)
-            self.assertIn("Cannot write test patch because sandbox tests failed", result.output)
+            self.assertIn("Sandbox tests failed after retry.", result.output)
             self.assertEqual((root / "calculator.py").read_text(encoding="utf-8"), original_source)
             self.assertFalse((root / "tests" / "test_calculator.py").exists())
             session_dir = _only_session(root)
@@ -710,6 +710,7 @@ class TestsAddCommandTests(unittest.TestCase):
             metadata = _read_json(session_dir / "test_generation_metadata.json")
 
             self.assertEqual(sandbox_results["status"], "failed")
+            self.assertEqual(metadata["status"], "failed_sandbox_after_retries")
             self.assertFalse(metadata["write_allowed"])
             self.assertFalse((session_dir / "test_apply_result.json").exists())
 
@@ -1399,6 +1400,7 @@ class TestsAddCommandTests(unittest.TestCase):
         self.assertIn("--force", result.output)
         self.assertIn("--max-generation-retries", result.output)
         self.assertIn("--max-structure-retries", result.output)
+        self.assertIn("--max-sandbox-retries", result.output)
         self.assertIn("--keep-sandbox", result.output)
 
     def test_schema_retry_prompt_is_available(self) -> None:
@@ -1409,6 +1411,14 @@ class TestsAddCommandTests(unittest.TestCase):
         self.assertIn("replace_in_file", result.output.lower())
         self.assertIn("insert_at_position", result.output.lower())
         self.assertIn("Return ONLY valid JSON", result.output)
+
+    def test_sandbox_retry_prompt_is_available(self) -> None:
+        result = CliRunner().invoke(app, ["prompts", "show", "test_generation_sandbox_retry"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("test_generation_sandbox_retry", result.output)
+        self.assertIn("Do not assert exceptions unless the source implementation clearly raises", result.output)
+        self.assertIn("sandbox failure log", result.output.lower())
 
     def test_schema_retry_cli_output_mentions_retry(self) -> None:
         runner = CliRunner()

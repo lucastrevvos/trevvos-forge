@@ -4530,6 +4530,10 @@ def tests_add(
         int,
         typer.Option("--max-generation-retries", help="Retry test generation after schema or operation errors."),
     ] = 1,
+    max_sandbox_retries: Annotated[
+        int,
+        typer.Option("--max-sandbox-retries", help="Retry test generation after sandbox execution failures."),
+    ] = 1,
     timeout: Annotated[
         int,
         typer.Option("--timeout", help="Timeout per sandbox test command in seconds."),
@@ -4569,6 +4573,8 @@ def tests_add(
             raise DiffError("--max-generation-retries must be between 0 and 3.")
         if max_structure_retries < 0 or max_structure_retries > 3:
             raise DiffError("--max-structure-retries must be between 0 and 3.")
+        if max_sandbox_retries < 0 or max_sandbox_retries > 3:
+            raise DiffError("--max-sandbox-retries must be between 0 and 3.")
 
         workspace_root = path.resolve()
         request = TestAddRequest(
@@ -4585,6 +4591,7 @@ def tests_add(
             keep_sandbox=keep_sandbox,
             max_generation_retries=max_generation_retries,
             max_structure_retries=max_structure_retries,
+            max_sandbox_retries=max_sandbox_retries,
             timeout=timeout,
         )
 

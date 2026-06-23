@@ -445,6 +445,7 @@ def build_test_generation_summary(
     status: str,
     existing_tests_check: ExistingTestsCheck | None = None,
     generation_retries: dict | None = None,
+    sandbox_retries: dict | None = None,
     structure_validation: dict | None = None,
     import_repair: dict | None = None,
     structure_retries: dict | None = None,
@@ -454,6 +455,7 @@ def build_test_generation_summary(
     symbols_targeted = "\n".join(f"- {symbol.name}" for symbol in target.symbols)
     existing_tests_summary = _existing_tests_summary_section(existing_tests_check)
     generation_retry_summary = _generation_retry_summary_section(generation_retries)
+    sandbox_retry_summary = _sandbox_retry_summary_section(sandbox_retries)
     structure_summary = _structure_validation_summary_section(structure_validation)
     import_repair_summary = _import_repair_summary_section(import_repair)
     structure_retry_summary = _structure_retry_summary_section(structure_retries)
@@ -479,6 +481,10 @@ Status: {status}
 ## Test generation schema retry
 
 {generation_retry_summary}
+
+## Sandbox retry
+
+{sandbox_retry_summary}
 
 ## Test structure validation
 
@@ -514,6 +520,7 @@ def metadata_for_target(
     symbol_selector: dict | None = None,
     existing_tests_check: ExistingTestsCheck | None = None,
     generation_retries: dict | None = None,
+    sandbox_retries: dict | None = None,
     structure_validation: dict | None = None,
     import_repair: dict | None = None,
     structure_retries: dict | None = None,
@@ -552,6 +559,13 @@ def metadata_for_target(
             "max": generation_retries.get("max"),
             "used": generation_retries.get("used"),
             "status": generation_retries.get("status"),
+        }
+
+    if sandbox_retries is not None:
+        metadata["sandbox_retries"] = {
+            "max": sandbox_retries.get("max"),
+            "used": sandbox_retries.get("used"),
+            "status": sandbox_retries.get("status"),
         }
 
     if structure_validation is not None:
@@ -782,6 +796,19 @@ def _generation_retry_summary_section(generation_retries: dict | None) -> str:
         f"Max retries: {generation_retries.get('max', 0)}",
         f"Used: {generation_retries.get('used', 0)}",
         f"Result: {generation_retries.get('status', 'unknown')}",
+    ]
+
+    return "\n".join(lines)
+
+
+def _sandbox_retry_summary_section(sandbox_retries: dict | None) -> str:
+    if sandbox_retries is None:
+        return "Not run."
+
+    lines = [
+        f"Max retries: {sandbox_retries.get('max', 0)}",
+        f"Used: {sandbox_retries.get('used', 0)}",
+        f"Result: {sandbox_retries.get('status', 'unknown')}",
     ]
 
     return "\n".join(lines)

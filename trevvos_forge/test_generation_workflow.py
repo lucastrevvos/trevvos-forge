@@ -75,6 +75,7 @@ class TestAddRequest:
     keep_sandbox: bool
     max_generation_retries: int
     max_structure_retries: int
+    max_sandbox_retries: int
     timeout: int
 
 
@@ -526,6 +527,7 @@ def run_tests_add_workflow(
             prompt_ref=prompt_template.ref,
         )
 
+    sandbox_retries = {"max": request.max_sandbox_retries, "used": 0, "status": "not_needed"}
     diff_warnings: list[str] = []
     unified_diff = build_unified_diff_from_file_changes(
         workspace_root=workspace_root,
@@ -620,6 +622,7 @@ def run_tests_add_workflow(
         symbol_selector=symbol_selector,
         existing_tests_check=existing_tests_check,
         generation_retries=generation_retries,
+        sandbox_retries=sandbox_retries,
         structure_validation=structure_validation,
         import_repair=import_repair,
         structure_retries=structure_retries,
@@ -638,11 +641,168 @@ def run_tests_add_workflow(
             status="diff_ready",
             existing_tests_check=existing_tests_check,
             generation_retries=generation_retries,
+            sandbox_retries=sandbox_retries,
             structure_validation=structure_validation,
             import_repair=import_repair,
             structure_retries=structure_retries,
         ),
     )
+
+    if sandbox_result.status != "passed" and sandbox_result.status != "timed_out" and request.max_sandbox_retries > 0:
+        while sandbox_retries["used"] < request.max_sandbox_retries:
+            attempt = sandbox_retries["used"] + 1
+            retry_prompt_template = get_prompt("test_generation_sandbox_retry")
+            retry_context = _build_sandbox_retry_context(
+                workspace_root=workspace_root,
+                target=target,
+                source_content=content_with_line_numbers(source_content),
+                test_content=content_with_line_numbers(test_content) if test_content is not None else None,
+                existing_tests_check=existing_tests_check,
+                current_file_changes=current_file_changes,
+                sandbox_result=sandbox_result,
+                sandbox_output=(session.path / "test_sandbox_output.log").read_text(encoding="utf-8"),
+                unified_diff=(session.path / "test_diff.patch").read_text(encoding="utf-8"),
+                force=request.force,
+            )
+            retry_prompt = retry_prompt_template.render(test_generation_sandbox_retry_context=retry_context)
+            retry_raw_response = actual_provider.generate(retry_prompt)
+            sandbox_retries["used"] = attempt
+            retry_metadata = {
+                "attempt": attempt,
+                "status": "failed",
+                "prompt": retry_prompt_template.ref,
+                "raw_response_path": "test_generation_sandbox_retry_raw_response.json"
+                if attempt == 1
+                else f"test_generation_sandbox_retry_{attempt}_raw_response.json",
+            }
+
+            try:
+                retry_file_changes = parse_file_changes_output(retry_raw_response)
+                validate_file_changes_are_tests_only(retry_file_changes)
+            except Exception as retry_exc:
+                if not _is_generation_schema_error(retry_exc):
+                    raise
+                retry_metadata["error_type"] = "schema_invalid"
+                retry_metadata["message"] = str(retry_exc)
+                _write_sandbox_retry_artifacts(
+                    session=session,
+                    attempt=attempt,
+                    prompt=retry_prompt,
+                    raw_response=retry_raw_response,
+                    metadata=retry_metadata,
+                )
+                if sandbox_retries["used"] >= request.max_sandbox_retries:
+                    sandbox_retries["status"] = "failed_after_retries"
+                    return _build_sandbox_failure_result(
+                        session=session,
+                        target=target,
+                        prompt_template_ref=prompt_template.ref,
+                        original_symbols=original_symbols,
+                        files_changed=[change.path for change in current_file_changes.changes],
+                        existing_tests_check=existing_tests_check,
+                        generation_retries=generation_retries,
+                        sandbox_retries=sandbox_retries,
+                        write=request.write,
+                        command_text=command_text,
+                        request=request,
+                        message="[red]Sandbox tests failed after retry.[/red]",
+                    )
+                continue
+
+            retry_structure_validation = validate_file_changes_test_structure(
+                workspace_root=workspace_root,
+                file_changes=retry_file_changes,
+                framework=target.framework,
+                source_symbols=[symbol.name for symbol in target.symbols],
+            )
+            retry_import_repair: dict | None = None
+            if retry_structure_validation["status"] == "failed":
+                repaired_retry_file_changes, retry_import_repair = _attempt_deterministic_test_import_repair(
+                    workspace_root=workspace_root,
+                    target=target,
+                    file_changes=retry_file_changes,
+                    structure_validation=retry_structure_validation,
+                )
+                if retry_import_repair["status"] == "repaired":
+                    retry_file_changes = repaired_retry_file_changes
+                    retry_structure_validation = validate_file_changes_test_structure(
+                        workspace_root=workspace_root,
+                        file_changes=retry_file_changes,
+                        framework=target.framework,
+                        source_symbols=[symbol.name for symbol in target.symbols],
+                    )
+
+            retry_structure_retries = {"max": 0, "used": 0, "status": "not_needed"}
+            sandbox_retries["status"] = "succeeded_after_retry"
+            retry_finalization = _finalize_sandbox_stage(
+                session=session,
+                workspace_root=workspace_root,
+                target=target,
+                request=request,
+                command_text=command_text,
+                prompt_template_ref=prompt_template.ref,
+                current_file_changes=retry_file_changes,
+                existing_tests_check=existing_tests_check,
+                generation_retries=generation_retries,
+                structure_validation=retry_structure_validation,
+                import_repair=retry_import_repair,
+                structure_retries=retry_structure_retries,
+                original_symbols=original_symbols,
+                sandbox_retries=sandbox_retries,
+            )
+            sandbox_result = retry_finalization["sandbox_result"]
+            metadata = retry_finalization["metadata"]
+            test_commands = retry_finalization["test_commands"]
+            command_source = retry_finalization["command_source"]
+            symbol_selector = retry_finalization["symbol_selector"]
+            write_allowed = retry_finalization["write_allowed"]
+            _write_sandbox_retry_artifacts(
+                session=session,
+                attempt=attempt,
+                prompt=retry_prompt,
+                raw_response=retry_raw_response,
+                metadata={
+                    **retry_metadata,
+                    "status": "succeeded_after_retry" if sandbox_result.status == "passed" else "failed",
+                    "sandbox_status": sandbox_result.status,
+                },
+            )
+            if sandbox_result.status == "passed":
+                sandbox_retries["status"] = "succeeded_after_retry"
+                break
+            if sandbox_retries["used"] >= request.max_sandbox_retries:
+                sandbox_retries["status"] = "failed_after_retries"
+                return _build_sandbox_failure_result(
+                    session=session,
+                    target=target,
+                    prompt_template_ref=prompt_template.ref,
+                    original_symbols=original_symbols,
+                    files_changed=[change.path for change in retry_file_changes.changes],
+                    existing_tests_check=existing_tests_check,
+                    generation_retries=generation_retries,
+                    sandbox_retries=sandbox_retries,
+                    write=request.write,
+                    command_text=command_text,
+                    request=request,
+                    message="[red]Sandbox tests failed after retry.[/red]",
+                )
+
+    if sandbox_result.status != "passed":
+        sandbox_retries["status"] = "failed_after_retries"
+        return _build_sandbox_failure_result(
+            session=session,
+            target=target,
+            prompt_template_ref=prompt_template.ref,
+            original_symbols=original_symbols,
+            files_changed=[change.path for change in current_file_changes.changes],
+            existing_tests_check=existing_tests_check,
+            generation_retries=generation_retries,
+            sandbox_retries=sandbox_retries,
+            write=request.write,
+            command_text=command_text,
+            request=request,
+            message="[red]Sandbox tests failed.[/red]",
+        )
 
     if not request.write:
         session = update_session_status(session, "test_diff_validated")
@@ -813,6 +973,10 @@ def render_test_add_result(*, result: TestAddResult, json_output: bool, console:
     generation_retry_used = int(generation_retries.get("used", 0) or 0)
     generation_retry_max = int(generation_retries.get("max", 0) or 0)
     generation_retry_status = generation_retries.get("status")
+    sandbox_retries = result.metadata.get("sandbox_retries", {}) if isinstance(result.metadata, dict) else {}
+    sandbox_retry_used = int(sandbox_retries.get("used", 0) or 0)
+    sandbox_retry_max = int(sandbox_retries.get("max", 0) or 0)
+    sandbox_retry_status = sandbox_retries.get("status")
 
     status = result.status
 
@@ -865,6 +1029,12 @@ def render_test_add_result(*, result: TestAddResult, json_output: bool, console:
         console.print(f"Review {result.session_path / 'test_sandbox_output.log'}.")
         return
 
+    if result.status == "failed_sandbox_after_retries":
+        console.print(result.message)
+        console.print(f"Review {result.session_path / 'test_sandbox_output.log'}.")
+        console.print(f"Review {result.session_path / 'test_generation_sandbox_retry_metadata.json'}.")
+        return
+
     if result.status == "tests_add_cancelled":
         console.print(result.message)
         return
@@ -885,6 +1055,8 @@ def render_test_add_result(*, result: TestAddResult, json_output: bool, console:
     console.print(f"Prompt:  {result.prompt_ref}")
     if generation_retry_used > 0 and generation_retry_status == "succeeded_after_retry":
         console.print(f"Schema retry used: {generation_retry_used}/{generation_retry_max}")
+    if sandbox_retry_used > 0:
+        console.print(f"Sandbox retry used: {sandbox_retry_used}/{sandbox_retry_max}")
     console.print("\n[bold]Files changed[/bold]")
     for changed_path in result.files_changed:
         console.print(f"  - {changed_path}")
@@ -917,6 +1089,11 @@ def render_test_add_result(*, result: TestAddResult, json_output: bool, console:
     console.print("\n[bold]Next[/bold]")
     if generation_retry_used > 0 and generation_retry_status == "succeeded_after_retry":
         console.print("  Test generation schema retry succeeded.")
+    if sandbox_retry_used > 0:
+        if sandbox_retry_status == "succeeded_after_retry":
+            console.print("  Test generation sandbox retry succeeded.")
+        elif sandbox_retry_status == "failed_after_retries":
+            console.print("  Test generation sandbox retry failed after retry.")
     if result.sandbox_status == "passed":
         console.print(f"  Re-run with `--write` to apply after review, or inspect test_diff.patch.")
     else:
@@ -1305,6 +1482,300 @@ def _build_generation_guardrail_failure_result(
             "summary": "test_generation_summary.md",
         },
         message="[red]Generated test file changes included non-test files.[/red]",
+        exit_code=1,
+        metadata=metadata,
+        prompt_ref=prompt_template_ref,
+        next_command=target.suggested_test_command,
+    )
+
+
+def _finalize_sandbox_stage(
+    *,
+    session: ForgeSession,
+    workspace_root: Path,
+    target: TestGenerationTarget,
+    request: TestAddRequest,
+    command_text: str,
+    prompt_template_ref: str,
+    current_file_changes: FileChangesOutput,
+    existing_tests_check: ExistingTestsCheck,
+    generation_retries: dict,
+    structure_validation: dict,
+    import_repair: dict | None,
+    structure_retries: dict,
+    original_symbols: list[str],
+    sandbox_retries: dict,
+) -> dict:
+    diff_warnings: list[str] = []
+    unified_diff = build_unified_diff_from_file_changes(
+        workspace_root=workspace_root,
+        file_changes=current_file_changes,
+        warnings=diff_warnings,
+    )
+    write_session_text(session, "test_diff.patch", unified_diff)
+    write_session_text(session, "diff.patch", unified_diff)
+
+    validation_result = validate_diff_patch(
+        workspace_root=workspace_root,
+        session=session,
+        diff_text=unified_diff,
+    )
+    check_patch(workspace_root=workspace_root, session=session)
+    validation_payload = validation_result.to_dict()
+    validation_payload["git_apply_check"] = "passed"
+    validation_payload["test_command"] = target.suggested_test_command
+    write_session_json(session, "test_generation_validation.json", validation_payload)
+    write_session_json(session, "diff_validation.json", validation_result.to_dict())
+    write_session_json(
+        session,
+        "diff_check.json",
+        {"git_apply_check": "passed", "patch_path": str(session.path / "test_diff.patch")},
+    )
+
+    test_commands, command_source, symbol_selector = select_test_generation_commands(
+        workspace_root=workspace_root,
+        target=target,
+    )
+    command_spec_source = (
+        "targeted_test_file"
+        if command_source == "targeted"
+        else "targeted_symbol"
+        if command_source == "targeted_symbol"
+        else command_source
+    )
+    command_specs = [CommandSpec(command=command, source=command_spec_source) for command in test_commands]
+    _record_timeline_event(
+        session,
+        "tests_add_sandbox_started",
+        command_text,
+        "started",
+        test_commands=test_commands,
+        command_source=command_source,
+        symbol_selector=symbol_selector,
+        keep_sandbox=request.keep_sandbox,
+    )
+    sandbox_result = run_test_specs_in_sandbox(
+        repo_root=workspace_root,
+        patch_path=session.path / "test_diff.patch",
+        command_specs=command_specs,
+        timeout_seconds=request.timeout,
+        keep_sandbox=request.keep_sandbox,
+    )
+    write_test_artifacts(session.path, sandbox_result)
+    _write_test_sandbox_aliases(
+        session.path,
+        command_source=command_source,
+        symbol_selector=symbol_selector,
+    )
+
+    sandbox_metadata = sandbox_result.sandbox or {}
+    sandbox_event = "tests_add_sandbox_completed" if sandbox_result.status == "passed" else "tests_add_sandbox_failed"
+    _record_timeline_event(
+        session,
+        sandbox_event,
+        command_text,
+        "succeeded" if sandbox_result.status == "passed" else "failed",
+        reason=None if sandbox_result.status == "passed" else sandbox_result.status,
+        artifacts=[
+            "test_sandbox_results.json",
+            "test_sandbox_output.log",
+            "sandbox_test_results.json",
+            "sandbox_test_output.log",
+        ],
+        test_status=sandbox_result.status,
+        patch_apply_check=sandbox_metadata.get("patch_apply_check", "unknown"),
+        patch_apply=sandbox_metadata.get("patch_apply", "unknown"),
+    )
+
+    write_allowed = sandbox_result.status == "passed"
+    metadata = metadata_for_target(
+        target=target,
+        write=request.write,
+        prompt_ref=prompt_template_ref,
+        status="diff_ready",
+        files_changed=[change.path for change in current_file_changes.changes],
+        sandbox_status=sandbox_result.status,
+        sandbox_commands=test_commands,
+        sandbox_command_source=command_source,
+        symbol_selector=symbol_selector,
+        existing_tests_check=existing_tests_check,
+        generation_retries=generation_retries,
+        sandbox_retries=sandbox_retries,
+        structure_validation=structure_validation,
+        import_repair=import_repair,
+        structure_retries=structure_retries,
+        symbols_original=original_symbols,
+        provider_called=True,
+        write_allowed=write_allowed,
+    )
+    write_session_json(session, "test_generation_metadata.json", metadata)
+    write_session_text(
+        session,
+        "test_generation_summary.md",
+        build_test_generation_summary(
+            target=target,
+            files_changed=[change.path for change in current_file_changes.changes],
+            write=request.write,
+            status="diff_ready",
+            existing_tests_check=existing_tests_check,
+            generation_retries=generation_retries,
+            sandbox_retries=sandbox_retries,
+            structure_validation=structure_validation,
+            import_repair=import_repair,
+            structure_retries=structure_retries,
+        ),
+    )
+
+    return {
+        "sandbox_result": sandbox_result,
+        "metadata": metadata,
+        "test_commands": test_commands,
+        "command_source": command_source,
+        "symbol_selector": symbol_selector,
+        "write_allowed": write_allowed,
+        "validation_payload": validation_payload,
+        "files_changed": [change.path for change in current_file_changes.changes],
+        "unified_diff": unified_diff,
+    }
+
+
+def _build_sandbox_retry_context(
+    *,
+    workspace_root: Path,
+    target: TestGenerationTarget,
+    source_content: str,
+    test_content: str | None,
+    existing_tests_check: ExistingTestsCheck,
+    current_file_changes: FileChangesOutput,
+    sandbox_result,
+    sandbox_output: str,
+    unified_diff: str,
+    force: bool,
+) -> str:
+    prompt_context = build_test_generation_context(
+        workspace_root=workspace_root,
+        target=target,
+        source_content=source_content,
+        test_content=test_content,
+        existing_tests_check=existing_tests_check,
+        force=force,
+    )
+    return f"""{prompt_context}
+
+Previous unified diff:
+```diff
+{unified_diff}
+```
+
+Current file_changes:
+```json
+{json.dumps(current_file_changes.to_dict(), indent=2, ensure_ascii=False)}
+```
+
+Sandbox failure:
+```json
+{json.dumps(sandbox_result.to_dict(), indent=2, ensure_ascii=False)}
+```
+
+Sandbox output:
+```text
+{sandbox_output}
+```
+"""
+
+
+def _write_sandbox_retry_artifacts(
+    *,
+    session: ForgeSession,
+    attempt: int,
+    prompt: str,
+    raw_response: str,
+    metadata: dict,
+) -> None:
+    if attempt == 1:
+        write_session_text(session, "test_generation_sandbox_retry_prompt.md", prompt)
+        write_session_text(session, "test_generation_sandbox_retry_raw_response.json", raw_response)
+        write_session_json(session, "test_generation_sandbox_retry_metadata.json", metadata)
+
+    prefix = f"test_generation_sandbox_retry_{attempt}"
+    write_session_text(session, f"{prefix}_prompt.md", prompt)
+    write_session_text(session, f"{prefix}_raw_response.json", raw_response)
+    write_session_json(session, f"{prefix}_metadata.json", metadata)
+
+
+def _build_sandbox_failure_result(
+    *,
+    session: ForgeSession,
+    target: TestGenerationTarget,
+    prompt_template_ref: str,
+    original_symbols: list[str],
+    files_changed: list[str],
+    existing_tests_check: ExistingTestsCheck,
+    generation_retries: dict,
+    sandbox_retries: dict,
+    write: bool,
+    command_text: str,
+    request: TestAddRequest,
+    message: str,
+) -> TestAddResult:
+    metadata = metadata_for_target(
+        target=target,
+        write=write,
+        prompt_ref=prompt_template_ref,
+        status="failed_sandbox_after_retries",
+        files_changed=files_changed,
+        existing_tests_check=existing_tests_check,
+        generation_retries=generation_retries,
+        sandbox_retries=sandbox_retries,
+        symbols_original=original_symbols,
+        provider_called=True,
+        write_allowed=False,
+    )
+    write_session_json(session, "test_generation_metadata.json", metadata)
+    write_session_text(
+        session,
+        "test_generation_summary.md",
+        build_test_generation_summary(
+            target=target,
+            files_changed=files_changed,
+            write=write,
+            status="failed_sandbox_after_retries",
+            existing_tests_check=existing_tests_check,
+            generation_retries=generation_retries,
+            sandbox_retries=sandbox_retries,
+        ),
+    )
+    session = update_session_status(session, "tests_add_failed")
+    _record_timeline_event(
+        session,
+        "tests_add_failed",
+        command_text,
+        "failed",
+        reason="failed_sandbox_after_retries",
+        artifacts=[
+            "test_sandbox_results.json",
+            "test_sandbox_output.log",
+            "test_generation_metadata.json",
+            "test_generation_summary.md",
+        ],
+    )
+    return TestAddResult(
+        status="failed_sandbox_after_retries",
+        session_id=session.metadata.id,
+        session_path=session.path,
+        source_path=target.source_path,
+        test_file=target.test_file,
+        symbols=original_symbols,
+        files_changed=files_changed,
+        write_allowed=False,
+        applied=False,
+        artifacts={
+            "sandbox_results": "test_sandbox_results.json",
+            "sandbox_output": "test_sandbox_output.log",
+            "metadata": "test_generation_metadata.json",
+            "summary": "test_generation_summary.md",
+        },
+        message=message,
         exit_code=1,
         metadata=metadata,
         prompt_ref=prompt_template_ref,

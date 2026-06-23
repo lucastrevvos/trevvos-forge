@@ -870,6 +870,61 @@ Retry context:
 {test_generation_retry_context}
 """,
     ),
+    "test_generation_sandbox_retry": PromptTemplate(
+        name="test_generation_sandbox_retry",
+        version="1.0.0",
+        description="Retries controlled test-only file_changes JSON after sandbox execution failures.",
+        template="""You are Trevvos Forge in Controlled Execution: test files only.
+
+The previous generated tests were structurally valid but failed in sandbox execution.
+Fix the generated tests only.
+Do not modify production files.
+Do not change the source implementation.
+Do not invent behavior that the source code does not implement.
+Use the sandbox failure log as evidence.
+Return only valid JSON with top-level "changes".
+Only create or modify test files.
+
+Rules:
+- Only create or modify test files.
+- Never modify production source files.
+- Do not remove or rewrite existing tests.
+- Do not assert exceptions unless the source implementation clearly raises them.
+- Do not add tests for desired behavior that is not implemented.
+- Tests must match current source behavior.
+- If the source function is a simple wrapper around an operator, test the observable result.
+- If an edge case behavior is ambiguous, avoid that assertion or mark it as a suggestion in summary, not as a failing test.
+- Use only allowed operation_based_edit operations:
+  - append_to_file
+  - create_file
+  - insert_after_heading
+  - insert_after_line
+  - insert_before_line
+  - replace_block
+  - replace_exact_text
+- Never use:
+  - replace_in_file
+  - insert_at_position
+  - insert_at_index
+  - insert_at_line_number
+  - insert_after_block
+  - edit_file
+  - patch_file
+  - update_file
+  - full_file_rewrite as operation
+- If replacing text, use replace_exact_text or replace_block.
+- If adding tests to an existing test file, prefer append_to_file.
+- If replacing an import line, use replace_exact_text or replace_block.
+- If creating a new test file, use create_file.
+- Return ONLY valid JSON with top-level "changes".
+- Do not use Markdown.
+- Do not use a code block.
+- Do not write text before or after the JSON.
+
+Retry context:
+{test_generation_sandbox_retry_context}
+""",
+    ),
     "semantic_patch_review": PromptTemplate(
         name="semantic_patch_review",
         version="1.0.0",

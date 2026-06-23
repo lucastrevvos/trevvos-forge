@@ -370,196 +370,262 @@ def run_tests_add_workflow(
     previous_raw_response_parsed = raw_response_json(raw_response)
     current_file_changes = file_changes
     generation_retries["status"] = "succeeded_after_retry" if generation_retries["used"] > 0 else "not_needed"
-    structure_validation = validate_file_changes_test_structure(
-        workspace_root=workspace_root,
-        file_changes=current_file_changes,
-        framework=target.framework,
-        source_symbols=[symbol.name for symbol in target.symbols],
-    )
-    import_repair: dict | None = None
-    unittest_method_repair: dict | None = None
-    structure_retries = {"max": request.max_structure_retries, "used": 0, "status": "not_needed"}
 
-    if structure_validation["status"] == "failed":
-        repaired_file_changes, unittest_method_repair = _attempt_deterministic_unittest_method_repair(
-            target=target,
-            file_changes=current_file_changes,
-            structure_validation=structure_validation,
-        )
-        write_session_json(
-            session,
-            "test_unittest_method_repair.json",
-            _summarize_unittest_method_repair(unittest_method_repair),
-        )
+    operation_retries = {"max": request.max_generation_retries, "used": 0, "status": "not_needed"}
+    operation_error: dict | None = None
 
-        if unittest_method_repair["status"] == "repaired":
-            current_file_changes = repaired_file_changes
+    while True:
+        try:
             structure_validation = validate_file_changes_test_structure(
                 workspace_root=workspace_root,
                 file_changes=current_file_changes,
                 framework=target.framework,
                 source_symbols=[symbol.name for symbol in target.symbols],
             )
+            import_repair: dict | None = None
+            unittest_method_repair: dict | None = None
+            structure_retries = {"max": request.max_structure_retries, "used": 0, "status": "not_needed"}
 
-    if structure_validation["status"] == "failed":
-        repaired_file_changes, import_repair = _attempt_deterministic_test_import_repair(
-            workspace_root=workspace_root,
-            target=target,
-            file_changes=current_file_changes,
-            structure_validation=structure_validation,
-        )
-        write_session_json(session, "test_import_repair.json", import_repair)
+            if structure_validation["status"] == "failed":
+                repaired_file_changes, unittest_method_repair = _attempt_deterministic_unittest_method_repair(
+                    target=target,
+                    file_changes=current_file_changes,
+                    structure_validation=structure_validation,
+                )
+                write_session_json(
+                    session,
+                    "test_unittest_method_repair.json",
+                    _summarize_unittest_method_repair(unittest_method_repair),
+                )
 
-        if import_repair["status"] == "repaired":
-            current_file_changes = repaired_file_changes
-            structure_validation = validate_file_changes_test_structure(
-                workspace_root=workspace_root,
-                file_changes=current_file_changes,
-                framework=target.framework,
-                source_symbols=[symbol.name for symbol in target.symbols],
-            )
+                if unittest_method_repair["status"] == "repaired":
+                    current_file_changes = repaired_file_changes
+                    structure_validation = validate_file_changes_test_structure(
+                        workspace_root=workspace_root,
+                        file_changes=current_file_changes,
+                        framework=target.framework,
+                        source_symbols=[symbol.name for symbol in target.symbols],
+                    )
 
-    while structure_validation["status"] == "failed" and structure_retries["used"] < request.max_structure_retries:
-        attempt = structure_retries["used"] + 1
-        retry_result = _run_structure_retry_attempt(
-            session=session,
-            workspace_root=workspace_root,
-            target=target,
-            provider=actual_provider,
-            attempt=attempt,
-            file_changes=current_file_changes,
-            structure_validation=structure_validation,
-            existing_tests_check=existing_tests_check,
-            raw_response=previous_raw_response,
-            raw_response_parsed=previous_raw_response_parsed,
-            import_repair=import_repair,
-        )
-        structure_retries["used"] = attempt
+            if structure_validation["status"] == "failed":
+                repaired_file_changes, import_repair = _attempt_deterministic_test_import_repair(
+                    workspace_root=workspace_root,
+                    target=target,
+                    file_changes=current_file_changes,
+                    structure_validation=structure_validation,
+                )
+                write_session_json(session, "test_import_repair.json", import_repair)
 
-        if retry_result["status"] == "hard_failure":
-            structure_retries["status"] = "failed_after_retries"
+                if import_repair["status"] == "repaired":
+                    current_file_changes = repaired_file_changes
+                    structure_validation = validate_file_changes_test_structure(
+                        workspace_root=workspace_root,
+                        file_changes=current_file_changes,
+                        framework=target.framework,
+                        source_symbols=[symbol.name for symbol in target.symbols],
+                    )
+
+            while structure_validation["status"] == "failed" and structure_retries["used"] < request.max_structure_retries:
+                attempt = structure_retries["used"] + 1
+                retry_result = _run_structure_retry_attempt(
+                    session=session,
+                    workspace_root=workspace_root,
+                    target=target,
+                    provider=actual_provider,
+                    attempt=attempt,
+                    file_changes=current_file_changes,
+                    structure_validation=structure_validation,
+                    existing_tests_check=existing_tests_check,
+                    raw_response=previous_raw_response,
+                    raw_response_parsed=previous_raw_response_parsed,
+                    import_repair=import_repair,
+                )
+                structure_retries["used"] = attempt
+
+                if retry_result["status"] == "hard_failure":
+                    structure_retries["status"] = "failed_after_retries"
+                    write_session_json(session, "test_structure_validation.json", structure_validation)
+                    current_file_changes = retry_result.get("file_changes", current_file_changes)
+                    break
+
+                current_file_changes = retry_result["file_changes"]
+                structure_validation = retry_result["structure_validation"]
+                import_repair = retry_result["import_repair"]
+                previous_raw_response = retry_result["raw_response"]
+                previous_raw_response_parsed = retry_result["raw_response_parsed"]
+
+                if structure_validation["status"] == "passed":
+                    structure_retries["status"] = "succeeded_after_retry"
+                    break
+
+            if structure_validation["status"] == "failed":
+                if structure_retries["used"] > 0 and structure_retries["status"] != "failed_after_retries":
+                    structure_retries["status"] = "failed_after_retries"
+                elif structure_retries["used"] == 0:
+                    structure_retries["status"] = "not_needed"
+
+            write_session_json(session, "test_file_changes.json", current_file_changes.to_dict())
+            write_session_json(session, "file_changes.json", current_file_changes.to_dict())
             write_session_json(session, "test_structure_validation.json", structure_validation)
-            current_file_changes = retry_result.get("file_changes", current_file_changes)
+            files_changed = [change.path for change in current_file_changes.changes]
+
+            if structure_validation["status"] == "failed":
+                metadata = metadata_for_target(
+                    target=target,
+                    write=request.write,
+                    prompt_ref=prompt_template.ref,
+                    status="failed_test_structure_validation",
+                    files_changed=files_changed,
+                    existing_tests_check=existing_tests_check,
+                    generation_retries=generation_retries,
+                    structure_validation=structure_validation,
+                    unittest_method_repair=unittest_method_repair,
+                    import_repair=import_repair,
+                    structure_retries=structure_retries,
+                    symbols_original=original_symbols,
+                    provider_called=True,
+                    write_allowed=False,
+                )
+                write_session_json(session, "test_generation_metadata.json", metadata)
+                write_session_text(
+                    session,
+                    "test_generation_summary.md",
+                    build_test_generation_summary(
+                        target=target,
+                        files_changed=files_changed,
+                        write=request.write,
+                        status="failed_test_structure_validation",
+                        existing_tests_check=existing_tests_check,
+                        generation_retries=generation_retries,
+                        structure_validation=structure_validation,
+                        unittest_method_repair=unittest_method_repair,
+                        import_repair=import_repair,
+                        structure_retries=structure_retries,
+                    ),
+                )
+                session = update_session_status(session, "tests_add_failed")
+                _record_timeline_event(
+                    session,
+                    "tests_add_failed",
+                    command_text,
+                    "failed",
+                    reason="failed_test_structure_validation",
+                    artifacts=[
+                        "test_structure_validation.json",
+                        "test_import_repair.json",
+                        "test_generation_metadata.json",
+                        "test_generation_summary.md",
+                        *(
+                            [
+                                "test_generation_retry_prompt.md",
+                                "test_generation_retry_raw_response.json",
+                                "test_generation_retry_metadata.json",
+                            ]
+                            if structure_retries["used"] > 0
+                            else []
+                        ),
+                    ],
+                )
+                return TestAddResult(
+                    status="tests_add_failed",
+                    session_id=session.metadata.id,
+                    session_path=session.path,
+                    source_path=target.source_path,
+                    test_file=target.test_file,
+                    symbols=original_symbols,
+                    files_changed=files_changed,
+                    write_allowed=False,
+                    applied=False,
+                    artifacts={
+                        "existing_tests_check": "existing_tests_check.json",
+                        "prompt": "test_generation_prompt.md",
+                        "raw_response": "test_generation_raw_response.json",
+                        "file_changes": "test_file_changes.json",
+                        "diff": "test_diff.patch",
+                        "metadata": "test_generation_metadata.json",
+                        "summary": "test_generation_summary.md",
+                        "validation": "test_generation_validation.json",
+                        "structure_validation": "test_structure_validation.json",
+                        "sandbox_results": "test_sandbox_results.json",
+                        "sandbox_output": "test_sandbox_output.log",
+                        **({"unittest_method_repair": "test_unittest_method_repair.json"} if unittest_method_repair is not None else {}),
+                        **({"import_repair": "test_import_repair.json"} if import_repair is not None else {}),
+                    },
+                    message="[red]Generated test file failed structural validation.[/red]"
+                    if structure_retries["used"] == 0
+                    else "[red]Generated tests still failed structural validation after retry.[/red]",
+                    exit_code=1,
+                    metadata=metadata,
+                    prompt_ref=prompt_template.ref,
+                )
+
+            sandbox_retries = {"max": request.max_sandbox_retries, "used": 0, "status": "not_needed"}
+            diff_warnings: list[str] = []
+            unified_diff = build_unified_diff_from_file_changes(
+                workspace_root=workspace_root,
+                file_changes=current_file_changes,
+                warnings=diff_warnings,
+            )
+            if operation_retries["used"] > 0:
+                operation_retries["status"] = "succeeded_after_retry"
             break
 
-        current_file_changes = retry_result["file_changes"]
-        structure_validation = retry_result["structure_validation"]
-        import_repair = retry_result["import_repair"]
-        previous_raw_response = retry_result["raw_response"]
-        previous_raw_response_parsed = retry_result["raw_response_parsed"]
+        except DiffError as exc:
+            if not _is_operation_error(exc):
+                raise
+            operation_error = _build_operation_error_payload(exc, current_file_changes)
+            _write_operation_error_artifacts(session, operation_error)
 
-        if structure_validation["status"] == "passed":
-            structure_retries["status"] = "succeeded_after_retry"
-            break
+            if operation_retries["used"] >= request.max_generation_retries:
+                operation_retries["status"] = "failed_after_retries"
+                return _build_operation_failure_result(
+                    session=session,
+                    target=target,
+                    prompt_template_ref=prompt_template.ref,
+                    original_symbols=original_symbols,
+                    existing_tests_check=existing_tests_check,
+                    generation_retries=generation_retries,
+                    operation_retries=operation_retries,
+                    operation_error=operation_error,
+                    write=request.write,
+                    command_text=command_text,
+                )
 
-    if structure_validation["status"] == "failed":
-        if structure_retries["used"] > 0 and structure_retries["status"] != "failed_after_retries":
-            structure_retries["status"] = "failed_after_retries"
-        elif structure_retries["used"] == 0:
-            structure_retries["status"] = "not_needed"
-
-    write_session_json(session, "test_file_changes.json", current_file_changes.to_dict())
-    write_session_json(session, "file_changes.json", current_file_changes.to_dict())
-    write_session_json(session, "test_structure_validation.json", structure_validation)
-    files_changed = [change.path for change in current_file_changes.changes]
-
-    if structure_validation["status"] == "failed":
-        metadata = metadata_for_target(
-            target=target,
-            write=request.write,
-            prompt_ref=prompt_template.ref,
-            status="failed_test_structure_validation",
-            files_changed=files_changed,
-            existing_tests_check=existing_tests_check,
-            generation_retries=generation_retries,
-            structure_validation=structure_validation,
-            unittest_method_repair=unittest_method_repair,
-            import_repair=import_repair,
-            structure_retries=structure_retries,
-            symbols_original=original_symbols,
-            provider_called=True,
-            write_allowed=False,
-        )
-        write_session_json(session, "test_generation_metadata.json", metadata)
-        write_session_text(
-            session,
-            "test_generation_summary.md",
-            build_test_generation_summary(
+            attempt = operation_retries["used"] + 1
+            retry_result = _run_operation_retry_attempt(
+                session=session,
+                workspace_root=workspace_root,
                 target=target,
-                files_changed=files_changed,
-                write=request.write,
-                status="failed_test_structure_validation",
+                provider=actual_provider,
+                attempt=attempt,
+                file_changes=current_file_changes,
+                operation_error=operation_error,
                 existing_tests_check=existing_tests_check,
-                generation_retries=generation_retries,
-                structure_validation=structure_validation,
-                unittest_method_repair=unittest_method_repair,
-                import_repair=import_repair,
-                structure_retries=structure_retries,
-            ),
-        )
-        session = update_session_status(session, "tests_add_failed")
-        _record_timeline_event(
-            session,
-            "tests_add_failed",
-            command_text,
-            "failed",
-            reason="failed_test_structure_validation",
-            artifacts=[
-                "test_structure_validation.json",
-                "test_import_repair.json",
-                "test_generation_metadata.json",
-                "test_generation_summary.md",
-                *(
-                    [
-                        "test_generation_retry_prompt.md",
-                        "test_generation_retry_raw_response.json",
-                        "test_generation_retry_metadata.json",
-                    ]
-                    if structure_retries["used"] > 0
-                    else []
-                ),
-            ],
-        )
-        return TestAddResult(
-            status="tests_add_failed",
-            session_id=session.metadata.id,
-            session_path=session.path,
-            source_path=target.source_path,
-            test_file=target.test_file,
-            symbols=original_symbols,
-            files_changed=files_changed,
-            write_allowed=False,
-            applied=False,
-            artifacts={
-                "existing_tests_check": "existing_tests_check.json",
-                "prompt": "test_generation_prompt.md",
-                "raw_response": "test_generation_raw_response.json",
-                "file_changes": "test_file_changes.json",
-                "diff": "test_diff.patch",
-                "metadata": "test_generation_metadata.json",
-                "summary": "test_generation_summary.md",
-                "validation": "test_generation_validation.json",
-                "structure_validation": "test_structure_validation.json",
-                "sandbox_results": "test_sandbox_results.json",
-                "sandbox_output": "test_sandbox_output.log",
-                **({"unittest_method_repair": "test_unittest_method_repair.json"} if unittest_method_repair is not None else {}),
-                **({"import_repair": "test_import_repair.json"} if import_repair is not None else {}),
-            },
-            message="[red]Generated test file failed structural validation.[/red]"
-            if structure_retries["used"] == 0
-            else "[red]Generated tests still failed structural validation after retry.[/red]",
-            exit_code=1,
-            metadata=metadata,
-            prompt_ref=prompt_template.ref,
-        )
+                source_content=source_content,
+                test_content=test_content,
+                force=request.force,
+            )
+            operation_retries["used"] = attempt
 
-    sandbox_retries = {"max": request.max_sandbox_retries, "used": 0, "status": "not_needed"}
-    diff_warnings: list[str] = []
-    unified_diff = build_unified_diff_from_file_changes(
-        workspace_root=workspace_root,
-        file_changes=current_file_changes,
-        warnings=diff_warnings,
-    )
+            if retry_result["status"] == "failed":
+                operation_retries["status"] = "failed_after_retries"
+                return _build_operation_failure_result(
+                    session=session,
+                    target=target,
+                    prompt_template_ref=prompt_template.ref,
+                    original_symbols=original_symbols,
+                    existing_tests_check=existing_tests_check,
+                    generation_retries=generation_retries,
+                    operation_retries=operation_retries,
+                    operation_error=operation_error,
+                    write=request.write,
+                    command_text=command_text,
+                )
+
+            current_file_changes = retry_result["file_changes"]
+            write_session_json(session, "test_file_changes.json", current_file_changes.to_dict())
+            write_session_json(session, "file_changes.json", current_file_changes.to_dict())
+
     write_session_text(session, "test_diff.patch", unified_diff)
     write_session_text(session, "diff.patch", unified_diff)
 
@@ -649,6 +715,7 @@ def run_tests_add_workflow(
         existing_tests_check=existing_tests_check,
         generation_retries=generation_retries,
         sandbox_retries=sandbox_retries,
+        operation_retries=operation_retries,
         structure_validation=structure_validation,
         unittest_method_repair=unittest_method_repair,
         import_repair=import_repair,
@@ -669,6 +736,7 @@ def run_tests_add_workflow(
             existing_tests_check=existing_tests_check,
             generation_retries=generation_retries,
             sandbox_retries=sandbox_retries,
+            operation_retries=operation_retries,
             structure_validation=structure_validation,
             unittest_method_repair=unittest_method_repair,
             import_repair=import_repair,
@@ -1074,6 +1142,32 @@ def render_test_add_result(*, result: TestAddResult, json_output: bool, console:
     if result.status == "failed_test_generation_guardrail":
         console.print(result.message)
         console.print(f"Review {result.session_path / 'test_generation_validation.json'}.")
+        return
+
+    if result.status == "failed_test_generation_operation":
+        console.print(result.message)
+        error_path = result.session_path / "test_generation_operation_error.json"
+        if error_path.exists():
+            try:
+                error_payload = json.loads(error_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                error_payload = {}
+            operation = error_payload.get("operation")
+            op_path = error_payload.get("path")
+            op_target = error_payload.get("target", "")
+            if operation and op_path:
+                console.print(f"Operation: {operation} in {op_path}")
+                if op_target:
+                    short_target = op_target[:80] + "..." if len(op_target) > 80 else op_target
+                    console.print(f"Target not found: {short_target}")
+        op_retries = result.metadata.get("operation_retries", {}) if isinstance(result.metadata, dict) else {}
+        retry_used = int(op_retries.get("used", 0) or 0)
+        retry_max = int(op_retries.get("max", 0) or 0)
+        if retry_used > 0:
+            console.print(f"Operation retry used: {retry_used}/{retry_max}")
+        console.print(f"Review {result.session_path / 'test_generation_operation_error.json'}.")
+        if retry_used > 0:
+            console.print(f"Review {result.session_path / 'test_generation_operation_retry_metadata.json'}.")
         return
 
     if result.status == "write_blocked":
@@ -2379,3 +2473,341 @@ def _write_structure_retry_artifacts(
         write_session_text(session, "test_generation_retry_prompt.md", prompt)
         write_session_text(session, "test_generation_retry_raw_response.json", raw_response)
         write_session_json(session, "test_generation_retry_metadata.json", metadata)
+
+
+def _is_operation_error(exc: Exception) -> bool:
+    if not isinstance(exc, DiffError):
+        return False
+    message = str(exc)
+    return "target not found in" in message or "target is ambiguous in" in message
+
+
+def _build_operation_error_payload(exc: Exception, file_changes: FileChangesOutput) -> dict:
+    message = str(exc)
+    payload: dict[str, Any] = {
+        "status": "failed",
+        "error_type": "operation_target_not_found",
+        "message": message,
+    }
+    not_found_match = re.search(r"Operation (\S+) target not found in ([^:]+): (.+)$", message, re.DOTALL)
+    ambiguous_match = re.search(r"Operation (\S+) target is ambiguous in ([^:]+): (.+)$", message, re.DOTALL)
+    if not_found_match:
+        payload["operation"] = not_found_match.group(1)
+        payload["path"] = not_found_match.group(2).strip()
+        payload["target"] = not_found_match.group(3)
+    elif ambiguous_match:
+        payload["error_type"] = "operation_target_ambiguous"
+        payload["operation"] = ambiguous_match.group(1)
+        payload["path"] = ambiguous_match.group(2).strip()
+        payload["target"] = ambiguous_match.group(3)
+    return payload
+
+
+def _write_operation_error_artifacts(session: ForgeSession, error_payload: dict) -> None:
+    write_session_json(session, "test_generation_operation_error.json", error_payload)
+    write_session_text(session, "test_generation_operation_error.md", _render_operation_error_markdown(error_payload))
+
+
+def _render_operation_error_markdown(error_payload: dict) -> str:
+    return f"""# Test Generation Operation Error
+
+- status: {error_payload.get("status", "failed")}
+- error_type: {error_payload.get("error_type", "unknown")}
+- operation: {error_payload.get("operation", "n/a")}
+- path: {error_payload.get("path", "n/a")}
+- target: {error_payload.get("target", "n/a")}
+- message: {error_payload.get("message", "unknown")}
+"""
+
+
+def _build_operation_retry_context(
+    *,
+    target: TestGenerationTarget,
+    source_content: str,
+    test_content: str | None,
+    existing_tests_check: ExistingTestsCheck,
+    operation_error: dict,
+    file_changes: FileChangesOutput,
+    force: bool,
+) -> str:
+    symbols = "\n".join(f"- {symbol.name}" for symbol in target.symbols) or "- none"
+    existing_tests_json = json.dumps(existing_tests_check.to_dict(), indent=2, ensure_ascii=False)
+    file_changes_json = json.dumps(file_changes.to_dict(), indent=2, ensure_ascii=False)
+    operation = operation_error.get("operation", "unknown")
+    op_path = operation_error.get("path", target.test_file)
+    op_target = operation_error.get("target", "(unknown)")
+    error_type = operation_error.get("error_type", "operation_target_not_found")
+    error_message = operation_error.get("message", "(unknown)")
+
+    if test_content is not None:
+        numbered = content_with_line_numbers(test_content)
+        current_test_block = (
+            f"Current {target.test_file} (REAL FILE — do not assume any previous patch was applied):\n"
+            f"```python\n{numbered}\n```"
+        )
+    else:
+        current_test_block = f"Current {target.test_file}: (file does not exist yet)"
+
+    numbered_source = content_with_line_numbers(source_content)
+
+    return f"""Source file: {target.source_path}
+Source module: {target.source_module}
+Mode: {'all_symbols' if target.all_symbols else 'single_symbol'}
+Symbols to test:
+{symbols}
+Target test file: {target.test_file}
+Detected framework: {target.framework}
+
+Operation error:
+- error_type: {error_type}
+- operation: {operation}
+- path: {op_path}
+- target: {op_target}
+- message: {error_message}
+
+Rule: Do not target text that does not exist in the current test file.
+Rule: Do not assume previous candidate patches were applied. They were not.
+Rule: If adding a test method, prefer append_to_file or use replace_block with an existing block.
+
+{current_test_block}
+
+Source content:
+```python
+{numbered_source}
+```
+
+Previous file_changes (the one that failed):
+{file_changes_json}
+
+Existing tests analysis:
+{existing_tests_json}"""
+
+
+def _write_operation_retry_artifacts(
+    *,
+    session: ForgeSession,
+    attempt: int,
+    prompt: str,
+    raw_response: str,
+    metadata: dict,
+) -> None:
+    prefix = f"test_generation_operation_retry_{attempt}"
+    write_session_text(session, f"{prefix}_prompt.md", prompt)
+    write_session_text(session, f"{prefix}_raw_response.json", raw_response)
+    write_session_json(session, f"{prefix}_metadata.json", metadata)
+    if attempt == 1:
+        write_session_text(session, "test_generation_operation_retry_prompt.md", prompt)
+        write_session_text(session, "test_generation_operation_retry_raw_response.json", raw_response)
+        write_session_json(session, "test_generation_operation_retry_metadata.json", metadata)
+
+
+def _run_operation_retry_attempt(
+    *,
+    session: ForgeSession,
+    workspace_root: Path,
+    target: TestGenerationTarget,
+    provider: Provider,
+    attempt: int,
+    file_changes: FileChangesOutput,
+    operation_error: dict,
+    existing_tests_check: ExistingTestsCheck,
+    source_content: str,
+    test_content: str | None,
+    force: bool,
+) -> dict:
+    retry_prompt_template = get_prompt("test_generation_operation_retry")
+    retry_context = _build_operation_retry_context(
+        target=target,
+        source_content=source_content,
+        test_content=test_content,
+        existing_tests_check=existing_tests_check,
+        operation_error=operation_error,
+        file_changes=file_changes,
+        force=force,
+    )
+    prompt = retry_prompt_template.render(test_generation_operation_retry_context=retry_context)
+    raw_response = provider.generate(prompt)
+
+    try:
+        retry_file_changes = parse_file_changes_output(raw_response)
+        validate_file_changes_are_tests_only(retry_file_changes)
+    except Exception as exc:
+        metadata: dict[str, Any] = {
+            "attempt": attempt,
+            "status": "failed",
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        }
+        _write_operation_retry_artifacts(
+            session=session,
+            attempt=attempt,
+            prompt=prompt,
+            raw_response=raw_response,
+            metadata=metadata,
+        )
+        return {"status": "failed", "metadata": metadata}
+
+    try:
+        retry_structure_validation = validate_file_changes_test_structure(
+            workspace_root=workspace_root,
+            file_changes=retry_file_changes,
+            framework=target.framework,
+            source_symbols=[symbol.name for symbol in target.symbols],
+        )
+
+        if retry_structure_validation["status"] == "failed":
+            repaired, retry_unittest_method_repair = _attempt_deterministic_unittest_method_repair(
+                target=target,
+                file_changes=retry_file_changes,
+                structure_validation=retry_structure_validation,
+            )
+            if retry_unittest_method_repair["status"] == "repaired":
+                retry_file_changes = repaired
+                retry_structure_validation = validate_file_changes_test_structure(
+                    workspace_root=workspace_root,
+                    file_changes=retry_file_changes,
+                    framework=target.framework,
+                    source_symbols=[symbol.name for symbol in target.symbols],
+                )
+
+        if retry_structure_validation["status"] == "failed":
+            repaired, retry_import_repair = _attempt_deterministic_test_import_repair(
+                workspace_root=workspace_root,
+                target=target,
+                file_changes=retry_file_changes,
+                structure_validation=retry_structure_validation,
+            )
+            if retry_import_repair["status"] == "repaired":
+                retry_file_changes = repaired
+                retry_structure_validation = validate_file_changes_test_structure(
+                    workspace_root=workspace_root,
+                    file_changes=retry_file_changes,
+                    framework=target.framework,
+                    source_symbols=[symbol.name for symbol in target.symbols],
+                )
+    except DiffError as exc:
+        metadata = {
+            "attempt": attempt,
+            "status": "failed",
+            "error_type": "operation_target_not_found",
+            "message": str(exc),
+        }
+        _write_operation_retry_artifacts(
+            session=session,
+            attempt=attempt,
+            prompt=prompt,
+            raw_response=raw_response,
+            metadata=metadata,
+        )
+        return {"status": "failed", "metadata": metadata}
+
+    if retry_structure_validation["status"] == "failed":
+        metadata = {
+            "attempt": attempt,
+            "status": "failed",
+            "error_type": "structure_validation_failed",
+            "structure_validation": retry_structure_validation,
+        }
+        _write_operation_retry_artifacts(
+            session=session,
+            attempt=attempt,
+            prompt=prompt,
+            raw_response=raw_response,
+            metadata=metadata,
+        )
+        return {"status": "failed", "metadata": metadata}
+
+    metadata = {
+        "attempt": attempt,
+        "status": "passed",
+        "structure_validation_status": retry_structure_validation["status"],
+    }
+    _write_operation_retry_artifacts(
+        session=session,
+        attempt=attempt,
+        prompt=prompt,
+        raw_response=raw_response,
+        metadata=metadata,
+    )
+    return {
+        "status": "passed",
+        "file_changes": retry_file_changes,
+        "metadata": metadata,
+    }
+
+
+def _build_operation_failure_result(
+    *,
+    session: ForgeSession,
+    target: TestGenerationTarget,
+    prompt_template_ref: str,
+    original_symbols: list[str],
+    existing_tests_check: ExistingTestsCheck,
+    generation_retries: dict,
+    operation_retries: dict,
+    operation_error: dict,
+    write: bool,
+    command_text: str,
+) -> TestAddResult:
+    metadata = metadata_for_target(
+        target=target,
+        write=write,
+        prompt_ref=prompt_template_ref,
+        status="failed_test_generation_operation",
+        files_changed=[],
+        existing_tests_check=existing_tests_check,
+        generation_retries=generation_retries,
+        operation_retries=operation_retries,
+        symbols_original=original_symbols,
+        provider_called=True,
+        write_allowed=False,
+    )
+    write_session_json(session, "test_generation_metadata.json", metadata)
+    write_session_text(
+        session,
+        "test_generation_summary.md",
+        build_test_generation_summary(
+            target=target,
+            files_changed=[],
+            write=write,
+            status="failed_test_generation_operation",
+            existing_tests_check=existing_tests_check,
+            generation_retries=generation_retries,
+            operation_retries=operation_retries,
+        ),
+    )
+    session = update_session_status(session, "tests_add_failed")
+    artifacts: dict[str, str] = {
+        "error": "test_generation_operation_error.json",
+        "error_markdown": "test_generation_operation_error.md",
+        "metadata": "test_generation_metadata.json",
+        "summary": "test_generation_summary.md",
+    }
+    if operation_retries["used"] > 0:
+        artifacts["operation_retry"] = "test_generation_operation_retry_metadata.json"
+    _record_timeline_event(
+        session,
+        "tests_add_failed",
+        command_text,
+        "failed",
+        reason="failed_test_generation_operation",
+        message=operation_error.get("message"),
+        artifacts=list(artifacts.values()),
+    )
+    return TestAddResult(
+        status="failed_test_generation_operation",
+        session_id=session.metadata.id,
+        session_path=session.path,
+        source_path=target.source_path,
+        test_file=target.test_file,
+        symbols=original_symbols,
+        files_changed=[],
+        write_allowed=False,
+        applied=False,
+        artifacts=artifacts,
+        message="[red]Generated test file changes could not be applied: operation target not found.[/red]",
+        exit_code=1,
+        metadata=metadata,
+        prompt_ref=prompt_template_ref,
+        next_command=target.suggested_test_command,
+    )

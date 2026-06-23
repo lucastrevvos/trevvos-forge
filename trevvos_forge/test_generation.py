@@ -450,6 +450,7 @@ def build_test_generation_summary(
     unittest_method_repair: dict | None = None,
     import_repair: dict | None = None,
     structure_retries: dict | None = None,
+    operation_retries: dict | None = None,
 ) -> str:
     changed = "\n".join(f"- {path}" for path in files_changed) or "- none"
     symbol = target.symbol.name if target.symbol is not None else "all"
@@ -461,6 +462,7 @@ def build_test_generation_summary(
     unittest_method_repair_summary = _unittest_method_repair_summary_section(unittest_method_repair)
     import_repair_summary = _import_repair_summary_section(import_repair)
     structure_retry_summary = _structure_retry_summary_section(structure_retries)
+    operation_retry_summary = _operation_retry_summary_section(operation_retries)
     return f"""# Test Generation Summary
 
 Mode: controlled_execution
@@ -487,6 +489,10 @@ Status: {status}
 ## Sandbox retry
 
 {sandbox_retry_summary}
+
+## Operation retry
+
+{operation_retry_summary}
 
 ## Test structure validation
 
@@ -531,6 +537,7 @@ def metadata_for_target(
     unittest_method_repair: dict | None = None,
     import_repair: dict | None = None,
     structure_retries: dict | None = None,
+    operation_retries: dict | None = None,
     symbols_original: list[str] | None = None,
     provider_called: bool | None = None,
     write_allowed: bool | None = None,
@@ -605,6 +612,13 @@ def metadata_for_target(
             "max": structure_retries.get("max"),
             "used": structure_retries.get("used"),
             "status": structure_retries.get("status"),
+        }
+
+    if operation_retries is not None:
+        metadata["operation_retries"] = {
+            "max": operation_retries.get("max"),
+            "used": operation_retries.get("used"),
+            "status": operation_retries.get("status"),
         }
 
     if provider_called is not None:
@@ -846,6 +860,19 @@ def _sandbox_retry_summary_section(sandbox_retries: dict | None) -> str:
         f"Max retries: {sandbox_retries.get('max', 0)}",
         f"Used: {sandbox_retries.get('used', 0)}",
         f"Result: {sandbox_retries.get('status', 'unknown')}",
+    ]
+
+    return "\n".join(lines)
+
+
+def _operation_retry_summary_section(operation_retries: dict | None) -> str:
+    if operation_retries is None:
+        return "Not run."
+
+    lines = [
+        f"Max retries: {operation_retries.get('max', 0)}",
+        f"Used: {operation_retries.get('used', 0)}",
+        f"Result: {operation_retries.get('status', 'unknown')}",
     ]
 
     return "\n".join(lines)

@@ -1103,6 +1103,343 @@ def _create_production_file_change_response() -> str:
     )
 
 
+def _create_replace_block_not_found_response() -> str:
+    return json.dumps(
+        {
+            "changes": [
+                {
+                    "path": "tests/test_calculator.py",
+                    "change_type": "modified",
+                    "mode": "operation_based_edit",
+                    "operation": "replace_block",
+                    "target": "def test_power(self):\n    self.assertEqual(power(2, 3), 8)\n",
+                    "replacement": "def test_power_fixed(self):\n    self.assertEqual(power(2, 3), 8)\n",
+                }
+            ]
+        }
+    )
+
+
+def _create_append_power_test_response() -> str:
+    return json.dumps(
+        {
+            "changes": [
+                {
+                    "path": "tests/test_calculator.py",
+                    "change_type": "modified",
+                    "mode": "operation_based_edit",
+                    "operation": "append_to_file",
+                    "insert": "\n    def test_power_basic(self):\n        from calculator import power\n        self.assertEqual(power(2, 3), 8)\n",
+                }
+            ]
+        }
+    )
+
+
+def _create_append_divide_test_response() -> str:
+    return json.dumps(
+        {
+            "changes": [
+                {
+                    "path": "tests/test_calculator.py",
+                    "change_type": "modified",
+                    "mode": "operation_based_edit",
+                    "operation": "append_to_file",
+                    "insert": "\n    def test_divide_two_positives(self):\n        self.assertEqual(divide(10, 2), 5.0)\n",
+                }
+            ]
+        }
+    )
+
+
+class OperationRetryTests(unittest.TestCase):
+    def _make_repo_with_test_file(self, root: Path) -> Path:
+        root = _sample_repo(root)
+        tests_dir = root / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_calculator.py").write_text(
+            "import unittest\n"
+            "from calculator import divide\n\n\n"
+            "class TestCalculator(unittest.TestCase):\n"
+            "    def test_divide_by_zero_raises_value_error(self):\n"
+            "        with self.assertRaises(ValueError):\n"
+            "            divide(10, 0)\n",
+            encoding="utf-8",
+        )
+        return root
+
+    def test_operation_error_triggers_retry_and_succeeds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_repo_with_test_file(Path(tmp))
+            provider = _FakeProvider(
+                [_create_replace_block_not_found_response(), _create_append_divide_test_response()]
+            )
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="divide",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=True,
+                    keep_sandbox=False,
+                    max_generation_retries=1,
+                    max_structure_retries=1,
+                    max_sandbox_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertNotEqual(result.status, "failed_test_generation_operation")
+            self.assertEqual(provider.call_count, 2)
+            self.assertTrue((result.session_path / "test_generation_operation_error.json").exists())
+            self.assertTrue((result.session_path / "test_generation_operation_retry_metadata.json").exists())
+
+    def test_operation_retry_prompt_contains_current_file_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_repo_with_test_file(Path(tmp))
+            provider = _FakeProvider(
+                [_create_replace_block_not_found_response(), _create_append_divide_test_response()]
+            )
+
+            run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="divide",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=True,
+                    keep_sandbox=False,
+                    max_generation_retries=1,
+                    max_structure_retries=1,
+                    max_sandbox_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertEqual(provider.call_count, 2)
+            retry_prompt = provider.prompts[1]
+            self.assertIn("REAL FILE", retry_prompt)
+            self.assertIn("do not assume", retry_prompt.lower())
+            self.assertIn("test_divide_by_zero_raises_value_error", retry_prompt)
+
+    def test_max_generation_retries_zero_disables_operation_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_repo_with_test_file(Path(tmp))
+            provider = _FakeProvider(_create_replace_block_not_found_response())
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="divide",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=True,
+                    keep_sandbox=False,
+                    max_generation_retries=0,
+                    max_structure_retries=1,
+                    max_sandbox_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertEqual(result.status, "failed_test_generation_operation")
+            self.assertEqual(provider.call_count, 1)
+            self.assertTrue((result.session_path / "test_generation_operation_error.json").exists())
+
+    def test_operation_failure_after_all_retries_exhausted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_repo_with_test_file(Path(tmp))
+            provider = _FakeProvider(
+                [_create_replace_block_not_found_response(), _create_replace_block_not_found_response()]
+            )
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="divide",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=True,
+                    keep_sandbox=False,
+                    max_generation_retries=1,
+                    max_structure_retries=1,
+                    max_sandbox_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertEqual(result.status, "failed_test_generation_operation")
+            self.assertEqual(provider.call_count, 2)
+            metadata = _read_json(result.session_path / "test_generation_metadata.json")
+            self.assertEqual(metadata["operation_retries"]["used"], 1)
+            self.assertEqual(metadata["operation_retries"]["status"], "failed_after_retries")
+
+    def test_schema_error_does_not_trigger_operation_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            provider = _FakeProvider(
+                [_create_unknown_operation_response(), _create_test_file_response()]
+            )
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="divide",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=False,
+                    keep_sandbox=False,
+                    max_generation_retries=1,
+                    max_structure_retries=1,
+                    max_sandbox_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertNotEqual(result.status, "failed_test_generation_operation")
+            self.assertFalse((result.session_path / "test_generation_operation_error.json").exists())
+
+    def test_operation_error_artifacts_written(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_repo_with_test_file(Path(tmp))
+            provider = _FakeProvider(_create_replace_block_not_found_response())
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="divide",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=True,
+                    keep_sandbox=False,
+                    max_generation_retries=0,
+                    max_structure_retries=1,
+                    max_sandbox_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertEqual(result.status, "failed_test_generation_operation")
+            error_json = _read_json(result.session_path / "test_generation_operation_error.json")
+            self.assertIn("operation", error_json)
+            self.assertIn("path", error_json)
+            self.assertEqual(error_json["operation"], "replace_block")
+            self.assertIn("target not found in", error_json["message"])
+            self.assertTrue((result.session_path / "test_generation_operation_error.md").exists())
+
+    def test_operation_retry_metadata_recorded_in_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_repo_with_test_file(Path(tmp))
+            provider = _FakeProvider(
+                [_create_replace_block_not_found_response(), _create_append_divide_test_response()]
+            )
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="divide",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=True,
+                    keep_sandbox=False,
+                    max_generation_retries=1,
+                    max_structure_retries=1,
+                    max_sandbox_retries=1,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertNotEqual(result.status, "failed_test_generation_operation")
+            metadata = _read_json(result.session_path / "test_generation_metadata.json")
+            op_retries = metadata.get("operation_retries", {})
+            self.assertEqual(op_retries.get("used"), 1)
+            self.assertEqual(op_retries.get("status"), "succeeded_after_retry")
+
+    def test_sandbox_failure_does_not_set_operation_error_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo_with_power(Path(tmp))
+            provider = _FakeProvider(_create_power_bad_expectation_response())
+
+            result = run_tests_add_workflow(
+                TestAddRequest(
+                    repo_root=root,
+                    source_path="calculator.py",
+                    symbol="power",
+                    all_symbols=False,
+                    test_file=None,
+                    unit=False,
+                    e2e=False,
+                    write=False,
+                    yes=False,
+                    force=False,
+                    keep_sandbox=False,
+                    max_generation_retries=1,
+                    max_structure_retries=1,
+                    max_sandbox_retries=0,
+                    timeout=120,
+                ),
+                provider,
+            )
+
+            self.assertNotEqual(result.status, "failed_test_generation_operation")
+            self.assertFalse((result.session_path / "test_generation_operation_error.json").exists())
+
+    def test_prompt_catalog_has_operation_retry_prompt(self) -> None:
+        from trevvos_forge.prompt_catalog import get_prompt
+
+        prompt = get_prompt("test_generation_operation_retry")
+
+        self.assertEqual(prompt.name, "test_generation_operation_retry")
+        self.assertEqual(prompt.version, "1.0.0")
+        self.assertIn("test_generation_operation_retry_context", prompt.template)
+        rendered = prompt.render(test_generation_operation_retry_context="TEST CONTEXT")
+        self.assertIn("TEST CONTEXT", rendered)
+        self.assertIn("not found", rendered.lower())
+
+
 def _fake_result(root: Path):
     session_dir = root / ".trevvos" / "sessions" / "fake-session"
     session_dir.mkdir(parents=True, exist_ok=True)

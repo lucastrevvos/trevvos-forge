@@ -66,6 +66,7 @@ from trevvos_forge.project_scanner import (
 )
 from trevvos_forge.providers.factory import build_provider as _build_provider_factory
 from trevvos_forge.providers.ollama import OllamaProvider
+from trevvos_forge.providers.openai_compatible import OpenAICompatibleProvider
 from trevvos_forge.review_artifacts import (
     build_change_summary_markdown,
     build_patch_preview,
@@ -1358,33 +1359,44 @@ def doctor() -> None:
         console.print("[bold]Trevvos Forge Doctor[/bold]\n")
 
         console.print("[bold]Settings[/bold]")
+        console.print(f"   Provider:    {settings.provider}")
         console.print(f"   Model:       {settings.model}")
         console.print(f"   Base URL:    {settings.base_url}")
         console.print(f"   Timeout:     {settings.timeout}s")
 
-        with console.status("[bold]Checking Ollama...[/bold]", spinner="dots"):
-            models = provider.list_models()
+        if isinstance(provider, OllamaProvider):
+            with console.status("[bold]Checking Ollama...[/bold]", spinner="dots"):
+                models = provider.list_models()
 
-        console.print("\n[bold]Ollama[/bold]")
-        console.print("   Status:   [green]OK[/green]")
-        console.print(f"   Models:   {len(models)} found")
+            console.print("\n[bold]Ollama[/bold]")
+            console.print("   Status:   [green]OK[/green]")
+            console.print(f"   Models:   {len(models)} found")
 
-        if models:
-            console.print("\n[bold]Installed models[/bold]")
-            for model in models:
-                marker = "[green]*[/green]" if model == settings.model else "-"
-                console.print(f"   {marker} {model}")
+            if models:
+                console.print("\n[bold]Installed models[/bold]")
+                for model in models:
+                    marker = "[green]*[/green]" if model == settings.model else "-"
+                    console.print(f"   {marker} {model}")
 
-        if settings.model in models:
-            console.print("\n[green]Environment OK. Trevvos Forge is ready.[/green]")
+            if settings.model in models:
+                console.print("\n[green]Environment OK. Trevvos Forge is ready.[/green]")
+            else:
+                console.print(
+                    f"\n[yellow]Configured model was not found:[/yellow] {settings.model}"
+                )
+                console.print(
+                    "Run `ollama list` to see available models or set TREVVOS_FORGE_MODEL."
+                )
+                raise typer.Exit(code=1)
+        elif isinstance(provider, OpenAICompatibleProvider):
+            console.print(
+                f"\n[green]Provider configured: {settings.provider}[/green]"
+            )
+            console.print(
+                "Run a prompt command (e.g. trevvos analyze) to verify connectivity."
+            )
         else:
-            console.print(
-                f"\n[yellow]Configured model was not found:[/yellow] {settings.model}"
-            )
-            console.print(
-                "Run `ollama list` to see available models or set TREVVOS_FORGE_MODEL."
-            )
-            raise typer.Exit(code=1)
+            console.print(f"\n[green]Provider configured: {settings.provider}[/green]")
 
     except ForgeError as exc:
         print_error(str(exc))

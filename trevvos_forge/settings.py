@@ -9,6 +9,7 @@ class ForgeSettings:
     base_url: str
     timeout: int
     provider: str = "ollama"
+    api_key: str | None = None
 
     @classmethod
     def from_env(cls) -> "ForgeSettings":
@@ -16,6 +17,7 @@ class ForgeSettings:
         base_url = os.getenv("TREVVOS_FORGE_BASE_URL","http://localhost:11434")
         timeout_raw = os.getenv("TREVVOS_FORGE_TIMEOUT", "320")
         provider = os.getenv("TREVVOS_FORGE_PROVIDER", "ollama")
+        api_key = os.getenv("TREVVOS_FORGE_API_KEY") or None
 
         try:
             timeout = int(timeout_raw)
@@ -34,4 +36,5 @@ class ForgeSettings:
             base_url=base_url.rstrip("/"),
             timeout=timeout,
             provider=provider,
+            api_key=api_key,
         )

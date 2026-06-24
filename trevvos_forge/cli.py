@@ -120,6 +120,12 @@ from trevvos_forge.test_runner import (
     run_test_specs_in_sandbox,
     write_test_artifacts,
 )
+from trevvos_forge.advisory_workflow import (
+    AdvisoryProviderCallRequest,
+    record_advisory_timeline_event,
+    run_advisory_provider_call,
+    write_advisory_failure_metadata,
+)
 from trevvos_forge.test_apply_workflow import (
     TestApplyRequest,
     find_best_tests_apply_session,
@@ -1636,7 +1642,7 @@ def analyze(
             user_request=f"analyze {target}" if target else "analyze project",
             command="analyze",
         )
-        _record_timeline_event(session, "analyze_started", "trevvos analyze", "started")
+        record_advisory_timeline_event(session, "analyze_started", "trevvos analyze", "started")
 
         prompt_template = get_prompt("code_analysis")
         prompt = prompt_template.render(
@@ -1655,13 +1661,6 @@ def analyze(
             },
         )
         write_session_json(session, "project_profile.json", profile)
-        write_session_text(session=session, file_name="analysis_prompt.md", content=prompt)
-
-        with console.status("[bold]Analyzing code with your local LLM...[/bold]", spinner="dots"):
-            raw_response = provider.generate(prompt)
-
-        write_session_text(session=session, file_name="analysis_raw_response.md", content=raw_response)
-        write_session_text(session=session, file_name="analysis_report.md", content=raw_response)
 
         metadata = {
             "mode": "advisory",
@@ -1673,21 +1672,30 @@ def analyze(
             "files_analyzed": files_analyzed,
             "status": "succeeded",
         }
-        write_session_json(session, "analysis_metadata.json", metadata)
-        session = update_session_status(session, "analysis_completed")
-        _record_timeline_event(
-            session,
-            "analyze_completed",
-            "trevvos analyze",
-            "succeeded",
-            artifacts=[
-                "analysis_report.md",
-                "analysis_metadata.json",
-                "project_profile.json",
-                "selected_files.json",
-                "context.md",
-            ],
-        )
+        with console.status("[bold]Analyzing code with your local LLM...[/bold]", spinner="dots"):
+            advisory_result = run_advisory_provider_call(
+                session=session,
+                provider=provider,
+                request=AdvisoryProviderCallRequest(
+                    prompt=prompt,
+                    prompt_artifact_name="analysis_prompt.md",
+                    response_artifact_names=["analysis_raw_response.md", "analysis_report.md"],
+                    metadata=metadata,
+                    metadata_artifact_name="analysis_metadata.json",
+                    completed_status="analysis_completed",
+                    completed_event="analyze_completed",
+                    timeline_command="trevvos analyze",
+                    timeline_artifacts=[
+                        "analysis_report.md",
+                        "analysis_metadata.json",
+                        "project_profile.json",
+                        "selected_files.json",
+                        "context.md",
+                    ],
+                ),
+            )
+        session = advisory_result.session
+        raw_response = advisory_result.raw_response
 
         if json_output:
             console.print(json.dumps(metadata, indent=2, ensure_ascii=False))
@@ -1708,27 +1716,21 @@ def analyze(
         console.print(raw_response)
 
     except ForgeError as exc:
-        if session is not None:
-            write_session_json(
-                session,
-                "analysis_metadata.json",
-                {
-                    "mode": "advisory",
-                    "command": "analyze",
-                    "target": str(target) if target else "project",
-                    "language": _resolve_language(workspace_root, language) if 'workspace_root' in locals() else None,
-                    "status": "failed",
-                    "error": str(exc),
-                },
-            )
-            _record_timeline_event(
-                session,
-                "analyze_failed",
-                "trevvos analyze",
-                "failed",
-                message=str(exc),
-                artifacts=["analysis_metadata.json"],
-            )
+        write_advisory_failure_metadata(
+            session=session,
+            metadata_artifact_name="analysis_metadata.json",
+            metadata={
+                "mode": "advisory",
+                "command": "analyze",
+                "target": str(target) if target else "project",
+                "language": _resolve_language(workspace_root, language) if 'workspace_root' in locals() else None,
+                "status": "failed",
+                "error": str(exc),
+            },
+            failed_event="analyze_failed",
+            timeline_command="trevvos analyze",
+            message=str(exc),
+        )
         print_error(str(exc))
         raise typer.Exit(code=1)
 
@@ -1789,7 +1791,7 @@ def explain(
             user_request=f"explain {target}",
             command="explain",
         )
-        _record_timeline_event(session, "explain_started", "trevvos explain", "started")
+        record_advisory_timeline_event(session, "explain_started", "trevvos explain", "started")
 
         prompt_template = get_prompt("code_explanation")
         prompt = prompt_template.render(
@@ -1810,13 +1812,6 @@ def explain(
             },
         )
         write_session_json(session, "project_profile.json", profile)
-        write_session_text(session=session, file_name="explanation_prompt.md", content=prompt)
-
-        with console.status("[bold]Explaining code with your local LLM...[/bold]", spinner="dots"):
-            raw_response = provider.generate(prompt)
-
-        write_session_text(session=session, file_name="explanation_raw_response.md", content=raw_response)
-        write_session_text(session=session, file_name="explanation.md", content=raw_response)
 
         metadata = {
             "mode": "advisory",
@@ -1830,21 +1825,30 @@ def explain(
             "files_explained": files_explained,
             "status": "succeeded",
         }
-        write_session_json(session, "explanation_metadata.json", metadata)
-        session = update_session_status(session, "explanation_completed")
-        _record_timeline_event(
-            session,
-            "explain_completed",
-            "trevvos explain",
-            "succeeded",
-            artifacts=[
-                "explanation.md",
-                "explanation_metadata.json",
-                "project_profile.json",
-                "selected_files.json",
-                "context.md",
-            ],
-        )
+        with console.status("[bold]Explaining code with your local LLM...[/bold]", spinner="dots"):
+            advisory_result = run_advisory_provider_call(
+                session=session,
+                provider=provider,
+                request=AdvisoryProviderCallRequest(
+                    prompt=prompt,
+                    prompt_artifact_name="explanation_prompt.md",
+                    response_artifact_names=["explanation_raw_response.md", "explanation.md"],
+                    metadata=metadata,
+                    metadata_artifact_name="explanation_metadata.json",
+                    completed_status="explanation_completed",
+                    completed_event="explain_completed",
+                    timeline_command="trevvos explain",
+                    timeline_artifacts=[
+                        "explanation.md",
+                        "explanation_metadata.json",
+                        "project_profile.json",
+                        "selected_files.json",
+                        "context.md",
+                    ],
+                ),
+            )
+        session = advisory_result.session
+        raw_response = advisory_result.raw_response
 
         if json_output:
             console.print(json.dumps(metadata, indent=2, ensure_ascii=False))
@@ -1866,29 +1870,23 @@ def explain(
         console.print(raw_response)
 
     except ForgeError as exc:
-        if session is not None:
-            write_session_json(
-                session,
-                "explanation_metadata.json",
-                {
-                    "mode": "advisory",
-                    "command": "explain",
-                    "target": str(target),
-                    "symbol": symbol,
-                    "flow": flow,
-                    "language": _resolve_language(workspace_root, language) if 'workspace_root' in locals() else None,
-                    "status": "failed",
-                    "error": str(exc),
-                },
-            )
-            _record_timeline_event(
-                session,
-                "explain_failed",
-                "trevvos explain",
-                "failed",
-                message=str(exc),
-                artifacts=["explanation_metadata.json"],
-            )
+        write_advisory_failure_metadata(
+            session=session,
+            metadata_artifact_name="explanation_metadata.json",
+            metadata={
+                "mode": "advisory",
+                "command": "explain",
+                "target": str(target),
+                "symbol": symbol,
+                "flow": flow,
+                "language": _resolve_language(workspace_root, language) if 'workspace_root' in locals() else None,
+                "status": "failed",
+                "error": str(exc),
+            },
+            failed_event="explain_failed",
+            timeline_command="trevvos explain",
+            message=str(exc),
+        )
         print_error(str(exc))
         raise typer.Exit(code=1)
 
@@ -1961,7 +1959,7 @@ def spec(
             user_request=request,
             command="spec",
         )
-        _record_timeline_event(session, "spec_started", "trevvos spec", "started")
+        record_advisory_timeline_event(session, "spec_started", "trevvos spec", "started")
 
         prompt_template = get_prompt("implementation_handoff_spec")
         prompt = prompt_template.render(
@@ -1983,12 +1981,6 @@ def spec(
         )
         write_session_json(session, "project_profile.json", profile)
 
-        with console.status("[bold]Generating implementation handoff spec...[/bold]", spinner="dots"):
-            raw_response = provider.generate(prompt)
-
-        write_session_text(session=session, file_name="handoff_spec.md", content=raw_response)
-        write_session_text(session=session, file_name="external_ai_prompt.md", content=raw_response)
-
         metadata = {
             "mode": "advisory",
             "command": "spec",
@@ -2008,23 +2000,30 @@ def spec(
                 "context": "context.md",
             },
         }
-        write_session_text(session=session, file_name="handoff_prompt.md", content=prompt)
-        write_session_json(session, "handoff_metadata.json", metadata)
-        session = update_session_status(session, "spec_completed")
-        _record_timeline_event(
-            session,
-            "spec_completed",
-            "trevvos spec",
-            "succeeded",
-            artifacts=[
-                "handoff_spec.md",
-                "external_ai_prompt.md",
-                "handoff_metadata.json",
-                "project_profile.json",
-                "selected_files.json",
-                "context.md",
-            ],
-        )
+        with console.status("[bold]Generating implementation handoff spec...[/bold]", spinner="dots"):
+            advisory_result = run_advisory_provider_call(
+                session=session,
+                provider=provider,
+                request=AdvisoryProviderCallRequest(
+                    prompt=prompt,
+                    prompt_artifact_name="handoff_prompt.md",
+                    response_artifact_names=["handoff_spec.md", "external_ai_prompt.md"],
+                    metadata=metadata,
+                    metadata_artifact_name="handoff_metadata.json",
+                    completed_status="spec_completed",
+                    completed_event="spec_completed",
+                    timeline_command="trevvos spec",
+                    timeline_artifacts=[
+                        "handoff_spec.md",
+                        "external_ai_prompt.md",
+                        "handoff_metadata.json",
+                        "project_profile.json",
+                        "selected_files.json",
+                        "context.md",
+                    ],
+                ),
+            )
+        session = advisory_result.session
 
         if json_output:
             console.print(json.dumps(metadata, indent=2, ensure_ascii=False))
@@ -2046,28 +2045,22 @@ def spec(
         console.print(f"  Copy {session.path / 'external_ai_prompt.md'} into your preferred coding AI.")
 
     except ForgeError as exc:
-        if session is not None:
-            write_session_json(
-                session,
-                "handoff_metadata.json",
-                {
-                    "mode": "advisory",
-                    "command": "spec",
-                    "target": target_ai,
-                    "request": request,
-                    "language": _resolve_language(workspace_root, language) if 'workspace_root' in locals() else None,
-                    "status": "failed",
-                    "error": str(exc),
-                },
-            )
-            _record_timeline_event(
-                session,
-                "spec_failed",
-                "trevvos spec",
-                "failed",
-                message=str(exc),
-                artifacts=["handoff_metadata.json"],
-            )
+        write_advisory_failure_metadata(
+            session=session,
+            metadata_artifact_name="handoff_metadata.json",
+            metadata={
+                "mode": "advisory",
+                "command": "spec",
+                "target": target_ai,
+                "request": request,
+                "language": _resolve_language(workspace_root, language) if 'workspace_root' in locals() else None,
+                "status": "failed",
+                "error": str(exc),
+            },
+            failed_event="spec_failed",
+            timeline_command="trevvos spec",
+            message=str(exc),
+        )
         print_error(str(exc))
         raise typer.Exit(code=1)
 
@@ -2319,7 +2312,7 @@ def propose(
             user_request=request,
             command="propose",
         )
-        _record_timeline_event(session, "propose_started", "trevvos propose", "started")
+        record_advisory_timeline_event(session, "propose_started", "trevvos propose", "started")
 
         prompt_template = get_prompt("technical_proposal")
         prompt = prompt_template.render(
@@ -2340,13 +2333,6 @@ def propose(
             },
         )
         write_session_json(session, "project_profile.json", profile)
-        write_session_text(session=session, file_name="proposal_prompt.md", content=prompt)
-
-        with console.status("[bold]Generating technical proposal with your local LLM...[/bold]", spinner="dots"):
-            raw_response = provider.generate(prompt)
-
-        write_session_text(session=session, file_name="proposal_raw_response.md", content=raw_response)
-        write_session_text(session=session, file_name="proposal.md", content=raw_response)
 
         metadata = {
             "mode": "advisory",
@@ -2368,23 +2354,32 @@ def propose(
                 "context": "context.md",
             },
         }
-        write_session_json(session, "proposal_metadata.json", metadata)
-        session = update_session_status(session, "proposal_completed")
-        _record_timeline_event(
-            session,
-            "propose_completed",
-            "trevvos propose",
-            "succeeded",
-            artifacts=[
-                "proposal.md",
-                "proposal_metadata.json",
-                "proposal_prompt.md",
-                "proposal_raw_response.md",
-                "project_profile.json",
-                "selected_files.json",
-                "context.md",
-            ],
-        )
+        with console.status("[bold]Generating technical proposal with your local LLM...[/bold]", spinner="dots"):
+            advisory_result = run_advisory_provider_call(
+                session=session,
+                provider=provider,
+                request=AdvisoryProviderCallRequest(
+                    prompt=prompt,
+                    prompt_artifact_name="proposal_prompt.md",
+                    response_artifact_names=["proposal_raw_response.md", "proposal.md"],
+                    metadata=metadata,
+                    metadata_artifact_name="proposal_metadata.json",
+                    completed_status="proposal_completed",
+                    completed_event="propose_completed",
+                    timeline_command="trevvos propose",
+                    timeline_artifacts=[
+                        "proposal.md",
+                        "proposal_metadata.json",
+                        "proposal_prompt.md",
+                        "proposal_raw_response.md",
+                        "project_profile.json",
+                        "selected_files.json",
+                        "context.md",
+                    ],
+                ),
+            )
+        session = advisory_result.session
+        raw_response = advisory_result.raw_response
 
         if json_output:
             console.print(json.dumps(metadata, indent=2, ensure_ascii=False))
@@ -2405,28 +2400,22 @@ def propose(
         console.print(raw_response)
 
     except ForgeError as exc:
-        if session is not None:
-            write_session_json(
-                session,
-                "proposal_metadata.json",
-                {
-                    "mode": "advisory",
-                    "command": "propose",
-                    "request": request,
-                    "target": str(target) if target is not None else None,
-                    "language": _resolve_language(workspace_root, language) if 'workspace_root' in locals() else None,
-                    "status": "failed",
-                    "error": str(exc),
-                },
-            )
-            _record_timeline_event(
-                session,
-                "propose_failed",
-                "trevvos propose",
-                "failed",
-                message=str(exc),
-                artifacts=["proposal_metadata.json"],
-            )
+        write_advisory_failure_metadata(
+            session=session,
+            metadata_artifact_name="proposal_metadata.json",
+            metadata={
+                "mode": "advisory",
+                "command": "propose",
+                "request": request,
+                "target": str(target) if target is not None else None,
+                "language": _resolve_language(workspace_root, language) if 'workspace_root' in locals() else None,
+                "status": "failed",
+                "error": str(exc),
+            },
+            failed_event="propose_failed",
+            timeline_command="trevvos propose",
+            message=str(exc),
+        )
         print_error(str(exc))
         raise typer.Exit(code=1)
 

@@ -7,6 +7,7 @@ from typing import Any, Callable, Protocol
 import typer
 
 from trevvos_forge.apply_patch import apply_patch, check_patch
+from trevvos_forge.retry_budget import RetryBudget
 from trevvos_forge.commit_workflow import extract_patch_paths
 from trevvos_forge.diff_builder import build_unified_diff_from_file_changes
 from trevvos_forge.diff_validation import validate_diff_patch
@@ -227,7 +228,7 @@ def run_tests_add_workflow(
     actual_provider = provider if provider is not None else _resolve_provider(provider_factory)
     raw_response = actual_provider.generate(prompt)
     write_session_text(session, "test_generation_raw_response.json", raw_response)
-    generation_retries = {"max": request.max_generation_retries, "used": 0, "status": "not_needed"}
+    generation_retries = RetryBudget(max=request.max_generation_retries)
     generation_error: dict | None = None
     file_changes: FileChangesOutput | None = None
 
@@ -257,8 +258,8 @@ def run_tests_add_workflow(
             generation_error = _build_generation_error_payload(exc, raw_response)
             _write_generation_error_artifacts(session, generation_error)
 
-            if generation_retries["used"] >= request.max_generation_retries:
-                generation_retries["status"] = "failed_after_retries"
+            if not generation_retries.can_retry():
+                generation_retries.mark_failed_after_retries()
                 return _build_generation_failure_result(
                     session=session,
                     target=target,
@@ -272,7 +273,7 @@ def run_tests_add_workflow(
                     request=request,
                 )
 
-            attempt = generation_retries["used"] + 1
+            attempt = generation_retries.consume()
             retry_prompt_template = get_prompt("test_generation_schema_retry")
             retry_context = _build_generation_schema_retry_context(
                 workspace_root=workspace_root,
@@ -286,7 +287,6 @@ def run_tests_add_workflow(
             )
             retry_prompt = retry_prompt_template.render(test_generation_schema_retry_context=retry_context)
             retry_raw_response = actual_provider.generate(retry_prompt)
-            generation_retries["used"] = attempt
             raw_response = retry_raw_response
 
             try:
@@ -331,8 +331,8 @@ def run_tests_add_workflow(
                     metadata=retry_metadata,
                 )
                 generation_error = retry_error
-                if generation_retries["used"] >= request.max_generation_retries:
-                    generation_retries["status"] = "failed_after_retries"
+                if not generation_retries.can_retry():
+                    generation_retries.mark_failed_after_retries()
                     return _build_generation_failure_result(
                         session=session,
                         target=target,
@@ -362,16 +362,17 @@ def run_tests_add_workflow(
                 raw_response=retry_raw_response,
                 metadata=retry_metadata,
             )
-            generation_retries["status"] = "succeeded_after_retry"
+            generation_retries.mark_succeeded_after_retry()
             break
 
     assert file_changes is not None
     previous_raw_response = raw_response
     previous_raw_response_parsed = raw_response_json(raw_response)
     current_file_changes = file_changes
-    generation_retries["status"] = "succeeded_after_retry" if generation_retries["used"] > 0 else "not_needed"
+    if generation_retries.used > 0:
+        generation_retries.mark_succeeded_after_retry()
 
-    operation_retries = {"max": request.max_generation_retries, "used": 0, "status": "not_needed"}
+    operation_retries = RetryBudget(max=request.max_generation_retries)
     operation_error: dict | None = None
 
     while True:
@@ -384,7 +385,7 @@ def run_tests_add_workflow(
             )
             import_repair: dict | None = None
             unittest_method_repair: dict | None = None
-            structure_retries = {"max": request.max_structure_retries, "used": 0, "status": "not_needed"}
+            structure_retries = RetryBudget(max=request.max_structure_retries)
 
             if structure_validation["status"] == "failed":
                 repaired_file_changes, unittest_method_repair = _attempt_deterministic_unittest_method_repair(
@@ -425,8 +426,8 @@ def run_tests_add_workflow(
                         source_symbols=[symbol.name for symbol in target.symbols],
                     )
 
-            while structure_validation["status"] == "failed" and structure_retries["used"] < request.max_structure_retries:
-                attempt = structure_retries["used"] + 1
+            while structure_validation["status"] == "failed" and structure_retries.can_retry():
+                attempt = structure_retries.consume()
                 retry_result = _run_structure_retry_attempt(
                     session=session,
                     workspace_root=workspace_root,
@@ -440,10 +441,8 @@ def run_tests_add_workflow(
                     raw_response_parsed=previous_raw_response_parsed,
                     import_repair=import_repair,
                 )
-                structure_retries["used"] = attempt
-
                 if retry_result["status"] == "hard_failure":
-                    structure_retries["status"] = "failed_after_retries"
+                    structure_retries.mark_failed_after_retries()
                     write_session_json(session, "test_structure_validation.json", structure_validation)
                     current_file_changes = retry_result.get("file_changes", current_file_changes)
                     break
@@ -455,14 +454,14 @@ def run_tests_add_workflow(
                 previous_raw_response_parsed = retry_result["raw_response_parsed"]
 
                 if structure_validation["status"] == "passed":
-                    structure_retries["status"] = "succeeded_after_retry"
+                    structure_retries.mark_succeeded_after_retry()
                     break
 
             if structure_validation["status"] == "failed":
-                if structure_retries["used"] > 0 and structure_retries["status"] != "failed_after_retries":
-                    structure_retries["status"] = "failed_after_retries"
-                elif structure_retries["used"] == 0:
-                    structure_retries["status"] = "not_needed"
+                if structure_retries.used > 0 and structure_retries.status != "failed_after_retries":
+                    structure_retries.mark_failed_after_retries()
+                elif structure_retries.used == 0:
+                    structure_retries.mark_not_needed()
 
             write_session_json(session, "test_file_changes.json", current_file_changes.to_dict())
             write_session_json(session, "file_changes.json", current_file_changes.to_dict())
@@ -521,7 +520,7 @@ def run_tests_add_workflow(
                                 "test_generation_retry_raw_response.json",
                                 "test_generation_retry_metadata.json",
                             ]
-                            if structure_retries["used"] > 0
+                            if structure_retries.used > 0
                             else []
                         ),
                     ],
@@ -552,22 +551,22 @@ def run_tests_add_workflow(
                         **({"import_repair": "test_import_repair.json"} if import_repair is not None else {}),
                     },
                     message="[red]Generated test file failed structural validation.[/red]"
-                    if structure_retries["used"] == 0
+                    if structure_retries.used == 0
                     else "[red]Generated tests still failed structural validation after retry.[/red]",
                     exit_code=1,
                     metadata=metadata,
                     prompt_ref=prompt_template.ref,
                 )
 
-            sandbox_retries = {"max": request.max_sandbox_retries, "used": 0, "status": "not_needed"}
+            sandbox_retries = RetryBudget(max=request.max_sandbox_retries)
             diff_warnings: list[str] = []
             unified_diff = build_unified_diff_from_file_changes(
                 workspace_root=workspace_root,
                 file_changes=current_file_changes,
                 warnings=diff_warnings,
             )
-            if operation_retries["used"] > 0:
-                operation_retries["status"] = "succeeded_after_retry"
+            if operation_retries.used > 0:
+                operation_retries.mark_succeeded_after_retry()
             break
 
         except DiffError as exc:
@@ -576,8 +575,8 @@ def run_tests_add_workflow(
             operation_error = _build_operation_error_payload(exc, current_file_changes)
             _write_operation_error_artifacts(session, operation_error)
 
-            if operation_retries["used"] >= request.max_generation_retries:
-                operation_retries["status"] = "failed_after_retries"
+            if not operation_retries.can_retry():
+                operation_retries.mark_failed_after_retries()
                 return _build_operation_failure_result(
                     session=session,
                     target=target,
@@ -591,7 +590,7 @@ def run_tests_add_workflow(
                     command_text=command_text,
                 )
 
-            attempt = operation_retries["used"] + 1
+            attempt = operation_retries.consume()
             retry_result = _run_operation_retry_attempt(
                 session=session,
                 workspace_root=workspace_root,
@@ -605,10 +604,8 @@ def run_tests_add_workflow(
                 test_content=test_content,
                 force=request.force,
             )
-            operation_retries["used"] = attempt
-
             if retry_result["status"] == "failed":
-                operation_retries["status"] = "failed_after_retries"
+                operation_retries.mark_failed_after_retries()
                 return _build_operation_failure_result(
                     session=session,
                     target=target,
@@ -761,8 +758,8 @@ def run_tests_add_workflow(
     )
 
     if sandbox_result.status != "passed" and sandbox_result.status != "timed_out" and request.max_sandbox_retries > 0:
-        while sandbox_retries["used"] < request.max_sandbox_retries:
-            attempt = sandbox_retries["used"] + 1
+        while sandbox_retries.can_retry():
+            attempt = sandbox_retries.consume()
             retry_prompt_template = get_prompt("test_generation_sandbox_retry")
             retry_context = _build_sandbox_retry_context(
                 workspace_root=workspace_root,
@@ -778,7 +775,6 @@ def run_tests_add_workflow(
             )
             retry_prompt = retry_prompt_template.render(test_generation_sandbox_retry_context=retry_context)
             retry_raw_response = actual_provider.generate(retry_prompt)
-            sandbox_retries["used"] = attempt
             retry_metadata = {
                 "attempt": attempt,
                 "status": "failed",
@@ -803,8 +799,8 @@ def run_tests_add_workflow(
                     raw_response=retry_raw_response,
                     metadata=retry_metadata,
                 )
-                if sandbox_retries["used"] >= request.max_sandbox_retries:
-                    sandbox_retries["status"] = "failed_after_retries"
+                if not sandbox_retries.can_retry():
+                    sandbox_retries.mark_failed_after_retries()
                     return _build_sandbox_failure_result(
                         session=session,
                         target=target,
@@ -861,8 +857,8 @@ def run_tests_add_workflow(
                         source_symbols=[symbol.name for symbol in target.symbols],
                     )
 
-            retry_structure_retries = {"max": 0, "used": 0, "status": "not_needed"}
-            sandbox_retries["status"] = "succeeded_after_retry"
+            retry_structure_retries = RetryBudget(max=0)
+            sandbox_retries.mark_succeeded_after_retry()
             retry_finalization = _finalize_sandbox_stage(
                 session=session,
                 workspace_root=workspace_root,
@@ -898,10 +894,10 @@ def run_tests_add_workflow(
                 },
             )
             if sandbox_result.status == "passed":
-                sandbox_retries["status"] = "succeeded_after_retry"
+                sandbox_retries.mark_succeeded_after_retry()
                 break
-            if sandbox_retries["used"] >= request.max_sandbox_retries:
-                sandbox_retries["status"] = "failed_after_retries"
+            if not sandbox_retries.can_retry():
+                sandbox_retries.mark_failed_after_retries()
                 return _build_sandbox_failure_result(
                     session=session,
                     target=target,
@@ -919,7 +915,7 @@ def run_tests_add_workflow(
                 )
 
     if sandbox_result.status != "passed":
-        sandbox_retries["status"] = "failed_after_retries"
+        sandbox_retries.mark_failed_after_retries()
         return _build_sandbox_failure_result(
             session=session,
             target=target,
@@ -1545,7 +1541,7 @@ def _build_generation_failure_result(
         "test_generation_metadata.json",
         "test_generation_summary.md",
     ]
-    if generation_retries["used"] > 0:
+    if generation_retries.used > 0:
         artifacts.extend(
             [
                 "test_generation_schema_retry_prompt.md",
@@ -1560,8 +1556,8 @@ def _build_generation_failure_result(
                 "test_generation_schema_retry_1_metadata.json",
             ]
         )
-        if generation_retries["used"] > 1:
-            for attempt in range(2, generation_retries["used"] + 1):
+        if generation_retries.used > 1:
+            for attempt in range(2, generation_retries.used + 1):
                 artifacts.extend(
                     [
                         f"test_generation_schema_retry_{attempt}_prompt.md",
@@ -1596,7 +1592,7 @@ def _build_generation_failure_result(
             "summary": "test_generation_summary.md",
             **(
                 {"generation_retry": "test_generation_schema_retry_metadata.json"}
-                if generation_retries["used"] > 0
+                if generation_retries.used > 0
                 else {}
             ),
         },
@@ -2800,7 +2796,7 @@ def _build_operation_failure_result(
         "metadata": "test_generation_metadata.json",
         "summary": "test_generation_summary.md",
     }
-    if operation_retries["used"] > 0:
+    if operation_retries.used > 0:
         artifacts["operation_retry"] = "test_generation_operation_retry_metadata.json"
     _record_timeline_event(
         session,

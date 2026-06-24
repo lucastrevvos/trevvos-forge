@@ -35,6 +35,7 @@ from trevvos_forge.context_builder import build_context, content_with_line_numbe
 from trevvos_forge.diff_builder import build_unified_diff_from_file_changes
 from trevvos_forge.diff_validation import validate_diff_patch
 from trevvos_forge.engine import TrevvosForgeEngine
+from trevvos_forge.execution_tracker import CommandTimer
 from trevvos_forge.exceptions import (
     ApplyError,
     CommitError,
@@ -1633,6 +1634,7 @@ def analyze(
     """
     session = None
     try:
+        timer = CommandTimer()
         workspace_root = path.resolve()
         settings = load_settings()
         resolved_language = _resolve_language(workspace_root, language)
@@ -1707,6 +1709,8 @@ def analyze(
             )
         session = advisory_result.session
         raw_response = advisory_result.raw_response
+        metadata["duration_seconds"] = timer.duration_seconds
+        write_session_json(session, "analysis_metadata.json", metadata)
 
         if json_output:
             console.print(json.dumps(metadata, indent=2, ensure_ascii=False))
@@ -1725,6 +1729,7 @@ def analyze(
         console.print(f"  - {session.path / 'project_profile.json'}")
         console.print("\n[bold]Report[/bold]\n")
         console.print(raw_response)
+        console.print(f"\nDuration: {timer.format()}")
 
     except ForgeError as exc:
         write_advisory_failure_metadata(
@@ -1782,6 +1787,7 @@ def explain(
     """
     session = None
     try:
+        timer = CommandTimer()
         workspace_root = path.resolve()
         settings = load_settings()
         resolved_language = _resolve_language(workspace_root, language)
@@ -1860,6 +1866,8 @@ def explain(
             )
         session = advisory_result.session
         raw_response = advisory_result.raw_response
+        metadata["duration_seconds"] = timer.duration_seconds
+        write_session_json(session, "explanation_metadata.json", metadata)
 
         if json_output:
             console.print(json.dumps(metadata, indent=2, ensure_ascii=False))
@@ -1879,6 +1887,7 @@ def explain(
         console.print(f"  - {session.path / 'project_profile.json'}")
         console.print("\n[bold]Explanation[/bold]\n")
         console.print(raw_response)
+        console.print(f"\nDuration: {timer.format()}")
 
     except ForgeError as exc:
         write_advisory_failure_metadata(
@@ -1942,6 +1951,7 @@ def spec(
     """
     session = None
     try:
+        timer = CommandTimer()
         if not request.strip():
             raise DiffError("Spec request cannot be empty.")
 
@@ -2035,6 +2045,8 @@ def spec(
                 ),
             )
         session = advisory_result.session
+        metadata["duration_seconds"] = timer.duration_seconds
+        write_session_json(session, "handoff_metadata.json", metadata)
 
         if json_output:
             console.print(json.dumps(metadata, indent=2, ensure_ascii=False))
@@ -2054,6 +2066,7 @@ def spec(
         console.print(f"  - {session.path / 'project_profile.json'}")
         console.print("\n[bold]Next[/bold]")
         console.print(f"  Copy {session.path / 'external_ai_prompt.md'} into your preferred coding AI.")
+        console.print(f"\nDuration: {timer.format()}")
 
     except ForgeError as exc:
         write_advisory_failure_metadata(
@@ -2104,6 +2117,7 @@ def review_diff(
     """
     session = None
     try:
+        timer = CommandTimer()
         workspace_root = path.resolve()
         resolved_language = _resolve_language(workspace_root, language)
         git_status = _run_git_capture(workspace_root, ["status", "--short"])
@@ -2182,6 +2196,7 @@ def review_diff(
             "untracked_files_included": untracked_included,
             "untracked_files_skipped": len(untracked_artifact["skipped"]),
             "status": "succeeded",
+            "duration_seconds": timer.duration_seconds,
             "final_recommendation": _extract_final_recommendation(raw_response),
             "artifacts": {
                 "review": "diff_review.md",
@@ -2237,6 +2252,7 @@ def review_diff(
         console.print(f"  - {session.path / 'untracked_files.json'}")
         console.print("\n[bold]Review[/bold]\n")
         console.print(raw_response)
+        console.print(f"\nDuration: {timer.format()}")
 
     except ForgeError as exc:
         if session is not None:
@@ -2300,6 +2316,7 @@ def propose(
     """
     session = None
     try:
+        timer = CommandTimer()
         if not request.strip():
             raise DiffError("Proposal request cannot be empty.")
 
@@ -2391,6 +2408,8 @@ def propose(
             )
         session = advisory_result.session
         raw_response = advisory_result.raw_response
+        metadata["duration_seconds"] = timer.duration_seconds
+        write_session_json(session, "proposal_metadata.json", metadata)
 
         if json_output:
             console.print(json.dumps(metadata, indent=2, ensure_ascii=False))
@@ -2409,6 +2428,7 @@ def propose(
         console.print(f"  - {session.path / 'project_profile.json'}")
         console.print("\n[bold]Proposal[/bold]\n")
         console.print(raw_response)
+        console.print(f"\nDuration: {timer.format()}")
 
     except ForgeError as exc:
         write_advisory_failure_metadata(
@@ -4042,6 +4062,7 @@ def tests_inspect(
     session = None
 
     try:
+        timer = CommandTimer()
         if source_path is None:
             raise DiffError("Missing source_path.")
         if symbol and all_symbols:
@@ -4085,6 +4106,7 @@ def tests_inspect(
             target=target,
             check=check,
         )
+        metadata["duration_seconds"] = timer.duration_seconds
         report = render_tests_inspect_report(source_path=target.source_path, check=check)
         inspect_context = build_test_generation_context(
             workspace_root=workspace_root,
@@ -4168,6 +4190,7 @@ def tests_inspect(
         console.print(f"  - {session.path / 'tests_inspect.json'}")
         console.print("\n[bold]Next[/bold]")
         console.print(f"  trevvos tests add {target.source_path} {'--all' if target.all_symbols else '--symbol ' + target.symbol.name}")
+        console.print(f"\nDuration: {timer.format()}")
 
     except ForgeError as exc:
         if session is not None:
@@ -4520,6 +4543,7 @@ def tests_apply(
 ) -> None:
     """Apply a validated test patch from a previous dry-run session."""
     try:
+        timer = CommandTimer()
         workspace_root = path.resolve()
 
         if latest and session_id is None:
@@ -4536,6 +4560,8 @@ def tests_apply(
                 console.print("[yellow]Latest validated test patch already appears to be applied.[/yellow]")
                 console.print(f"Session: {session_id}")
                 console.print("Nothing to do.")
+                if not json_output:
+                    console.print(f"\nDuration: {timer.format()}")
                 return
 
         if not yes:
@@ -4562,6 +4588,7 @@ def tests_apply(
                         "applied": result.applied,
                         "files_changed": result.files_changed,
                         "block_reason": result.block_reason,
+                        "duration_seconds": timer.duration_seconds,
                         **(result.apply_result or {}),
                     },
                     indent=2,
@@ -4572,6 +4599,7 @@ def tests_apply(
             return
 
         render_tests_apply_result(result=result, console=console)
+        console.print(f"\nDuration: {timer.format()}")
 
         if result.exit_code != 0:
             raise typer.Exit(code=result.exit_code)

@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from typer.testing import CliRunner
 
@@ -354,6 +355,99 @@ class EndToEndSmokeTests(unittest.TestCase):
                 TestApplyRequest(repo_root=root, session_id=add_result.session_id)
             )
             self.assertEqual(provider.call_count, calls_before)
+
+
+class ControlledTestingTimingTests(unittest.TestCase):
+    """Verify duration fields appear in controlled testing command outputs."""
+
+    def test_tests_inspect_output_contains_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            result = runner.invoke(
+                app, ["tests", "inspect", "calculator.py", "--path", str(root)]
+            )
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("Duration:", result.output)
+
+    def test_tests_inspect_metadata_contains_duration_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            runner.invoke(app, ["tests", "inspect", "calculator.py", "--path", str(root)])
+            sessions_dir = root / ".trevvos" / "sessions"
+            meta_files = list(sessions_dir.glob("*/tests_inspect_metadata.json"))
+            self.assertTrue(len(meta_files) >= 1)
+            meta = json.loads(meta_files[0].read_text())
+            self.assertIn("duration_seconds", meta)
+            self.assertIsInstance(meta["duration_seconds"], (int, float))
+
+    def test_tests_inspect_json_output_has_no_plain_duration_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            result = runner.invoke(
+                app, ["tests", "inspect", "calculator.py", "--json", "--path", str(root)]
+            )
+            self.assertEqual(result.exit_code, 0, result.output)
+            # Must be valid JSON (no stray "Duration:" line)
+            json.loads(result.output.strip())
+
+    def test_tests_apply_human_output_contains_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            provider = _FakeProvider(_create_divide_test_response())
+            add_result = run_tests_add_workflow(_make_add_request(root), provider)
+            self.assertEqual(add_result.status, "test_diff_validated")
+            result = runner.invoke(
+                app,
+                ["tests", "apply", "--yes", "--session", add_result.session_id, "--path", str(root)],
+            )
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("Duration:", result.output)
+
+    def test_tests_apply_json_contains_duration_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            provider = _FakeProvider(_create_divide_test_response())
+            add_result = run_tests_add_workflow(_make_add_request(root), provider)
+            self.assertEqual(add_result.status, "test_diff_validated")
+            result = runner.invoke(
+                app,
+                [
+                    "tests", "apply", "--yes", "--json",
+                    "--session", add_result.session_id,
+                    "--path", str(root),
+                ],
+            )
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn('"duration_seconds"', result.output)
+
+    def test_tests_apply_json_has_no_plain_duration_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            provider = _FakeProvider(_create_divide_test_response())
+            add_result = run_tests_add_workflow(_make_add_request(root), provider)
+            self.assertEqual(add_result.status, "test_diff_validated")
+            result = runner.invoke(
+                app,
+                [
+                    "tests", "apply", "--yes", "--json",
+                    "--session", add_result.session_id,
+                    "--path", str(root),
+                ],
+            )
+            self.assertEqual(result.exit_code, 0)
+            self.assertNotIn("\nDuration:", result.output)
+
+    def test_tests_add_output_contains_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            with patch("trevvos_forge.cli.build_provider") as mock_bp:
+                mock_bp.return_value.generate.return_value = _create_divide_test_response()
+                result = runner.invoke(
+                    app,
+                    ["tests", "add", "calculator.py", "--symbol", "divide", "--path", str(root)],
+                )
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("Duration:", result.output)
 
 
 if __name__ == "__main__":

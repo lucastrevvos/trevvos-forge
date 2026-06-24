@@ -280,5 +280,122 @@ class AdvisoryReviewDiffSmokeTests(unittest.TestCase):
             mock_bp.return_value.generate.assert_not_called()
 
 
+class AdvisoryTimingTests(unittest.TestCase):
+    """Verify that timing output is present in human-readable commands."""
+
+    def _modified_repo(self, root: Path) -> Path:
+        root = _sample_repo(root)
+        (root / "calculator.py").write_text(
+            "def add(a, b):\n    return a + b\n\ndef power(base, exp):\n    return base ** exp\n",
+            encoding="utf-8",
+        )
+        return root
+
+    def test_analyze_output_contains_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            with _patch_provider() as mock_bp:
+                mock_bp.return_value.generate.return_value = FAKE_ADVISORY_RESPONSE
+                result = runner.invoke(app, ["analyze", "--path", str(root)])
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("Duration:", result.output)
+
+    def test_analyze_metadata_contains_duration_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            with _patch_provider() as mock_bp:
+                mock_bp.return_value.generate.return_value = FAKE_ADVISORY_RESPONSE
+                runner.invoke(app, ["analyze", "--path", str(root)])
+            meta = json.loads(
+                next((root / ".trevvos" / "sessions").glob("*/analysis_metadata.json")).read_text()
+            )
+            self.assertIn("duration_seconds", meta)
+            self.assertIsInstance(meta["duration_seconds"], (int, float))
+
+    def test_analyze_json_output_contains_duration_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            with _patch_provider() as mock_bp:
+                mock_bp.return_value.generate.return_value = FAKE_ADVISORY_RESPONSE
+                result = runner.invoke(app, ["analyze", "--json", "--path", str(root)])
+            self.assertEqual(result.exit_code, 0, result.output)
+            data = json.loads(result.output.strip())
+            self.assertIn("duration_seconds", data)
+
+    def test_analyze_json_output_has_no_plain_duration_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            with _patch_provider() as mock_bp:
+                mock_bp.return_value.generate.return_value = FAKE_ADVISORY_RESPONSE
+                result = runner.invoke(app, ["analyze", "--json", "--path", str(root)])
+            self.assertEqual(result.exit_code, 0)
+            # Output must be parseable as JSON (no extra text)
+            json.loads(result.output.strip())
+
+    def test_propose_output_contains_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            with _patch_provider() as mock_bp:
+                mock_bp.return_value.generate.return_value = FAKE_ADVISORY_RESPONSE
+                result = runner.invoke(
+                    app, ["propose", "add power function", "--path", str(root)]
+                )
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("Duration:", result.output)
+
+    def test_propose_metadata_contains_duration_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            with _patch_provider() as mock_bp:
+                mock_bp.return_value.generate.return_value = FAKE_ADVISORY_RESPONSE
+                runner.invoke(app, ["propose", "add power function", "--path", str(root)])
+            meta = json.loads(
+                next((root / ".trevvos" / "sessions").glob("*/proposal_metadata.json")).read_text()
+            )
+            self.assertIn("duration_seconds", meta)
+
+    def test_spec_output_contains_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            with _patch_provider() as mock_bp:
+                mock_bp.return_value.generate.return_value = FAKE_ADVISORY_RESPONSE
+                result = runner.invoke(
+                    app, ["spec", "add power function", "--path", str(root)]
+                )
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("Duration:", result.output)
+
+    def test_spec_metadata_contains_duration_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            with _patch_provider() as mock_bp:
+                mock_bp.return_value.generate.return_value = FAKE_ADVISORY_RESPONSE
+                runner.invoke(app, ["spec", "add power function", "--path", str(root)])
+            meta = json.loads(
+                next((root / ".trevvos" / "sessions").glob("*/handoff_metadata.json")).read_text()
+            )
+            self.assertIn("duration_seconds", meta)
+
+    def test_review_diff_output_contains_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._modified_repo(Path(tmp))
+            with _patch_provider() as mock_bp:
+                mock_bp.return_value.generate.return_value = FAKE_ADVISORY_RESPONSE
+                result = runner.invoke(app, ["review-diff", "--path", str(root)])
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("Duration:", result.output)
+
+    def test_review_diff_metadata_contains_duration_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._modified_repo(Path(tmp))
+            with _patch_provider() as mock_bp:
+                mock_bp.return_value.generate.return_value = FAKE_ADVISORY_RESPONSE
+                runner.invoke(app, ["review-diff", "--path", str(root)])
+            meta = json.loads(
+                next((root / ".trevvos" / "sessions").glob("*/diff_review_metadata.json")).read_text()
+            )
+            self.assertIn("duration_seconds", meta)
+
+
 if __name__ == "__main__":
     unittest.main()

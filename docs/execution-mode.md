@@ -64,6 +64,17 @@ When no `.trevvos/config.json` `test_commands` override is present, Forge tries 
 
 Before calling the provider, Forge checks the target test file for existing tests that appear to cover the requested symbol(s). A covered `--symbol` request is skipped by default; `--all` targets only missing symbols when coverage is partial. Use `--force` to generate complementary tests anyway.
 
+### `trevvos tests inspect`
+
+Inspects detected test coverage by source symbol without calling the provider, generating a patch, applying changes, or running tests.
+
+```bash
+trevvos tests inspect calculator.py
+trevvos tests inspect calculator.py --symbol divide
+trevvos tests inspect calculator.py --all
+trevvos tests inspect calculator.py --json
+```
+
 ### `trevvos review`
 
 Reviews a generated session using deterministic and optional LLM review.

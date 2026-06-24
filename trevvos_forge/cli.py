@@ -65,6 +65,7 @@ from trevvos_forge.project_scanner import (
     save_project_profile,
     scan_project,
 )
+from trevvos_forge.doctor import DoctorCheck, DoctorReport, run_doctor
 from trevvos_forge.providers.factory import build_provider as _build_provider_factory
 from trevvos_forge.providers.ollama import OllamaProvider
 from trevvos_forge.providers.openai_compatible import OpenAICompatibleProvider
@@ -1349,55 +1350,52 @@ def generate(
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print doctor report as JSON."),
+    ] = False,
+) -> None:
     """
     Check Trevvos Forge local environment.
     """
     try:
+        timer = CommandTimer()
         settings = load_settings()
-        provider = build_provider(settings)
+        report = run_doctor(settings)
 
+        if json_output:
+            print(json.dumps(report.to_dict(), indent=2))
+            if report.has_failures:
+                raise typer.Exit(code=1)
+            return
+
+        # Human-readable output
         console.print("[bold]Trevvos Forge Doctor[/bold]\n")
 
-        console.print("[bold]Settings[/bold]")
-        console.print(f"   Provider:    {settings.provider}")
-        console.print(f"   Model:       {settings.model}")
-        console.print(f"   Base URL:    {settings.base_url}")
-        console.print(f"   Timeout:     {settings.timeout}s")
+        console.print("[bold]Provider[/bold]")
+        console.print(f"  - provider: {report.provider}")
+        console.print(f"  - model:    {report.model}")
+        console.print(f"  - base_url: {report.base_url}")
+        if report.api_key_present:
+            console.print("  - api_key:  present")
 
-        if isinstance(provider, OllamaProvider):
-            with console.status("[bold]Checking Ollama...[/bold]", spinner="dots"):
-                models = provider.list_models()
+        console.print("\n[bold]Checks[/bold]")
+        status_icons = {
+            "passed": "[green]OK  [/green]",
+            "failed": "[red]FAIL[/red]",
+            "warning": "[yellow]WARN[/yellow]",
+            "skipped": "[dim]SKIP[/dim]",
+        }
+        for check in report.checks:
+            icon = status_icons.get(check.status, check.status.upper())
+            dur = f"  {check.duration_seconds:.2f}s" if check.duration_seconds is not None else ""
+            console.print(f"  {icon}  {check.message}{dur}")
 
-            console.print("\n[bold]Ollama[/bold]")
-            console.print("   Status:   [green]OK[/green]")
-            console.print(f"   Models:   {len(models)} found")
+        console.print(f"\nDuration: {timer.format()}")
 
-            if models:
-                console.print("\n[bold]Installed models[/bold]")
-                for model in models:
-                    marker = "[green]*[/green]" if model == settings.model else "-"
-                    console.print(f"   {marker} {model}")
-
-            if settings.model in models:
-                console.print("\n[green]Environment OK. Trevvos Forge is ready.[/green]")
-            else:
-                console.print(
-                    f"\n[yellow]Configured model was not found:[/yellow] {settings.model}"
-                )
-                console.print(
-                    "Run `ollama list` to see available models or set TREVVOS_FORGE_MODEL."
-                )
-                raise typer.Exit(code=1)
-        elif isinstance(provider, OpenAICompatibleProvider):
-            console.print(
-                f"\n[green]Provider configured: {settings.provider}[/green]"
-            )
-            console.print(
-                "Run a prompt command (e.g. trevvos analyze) to verify connectivity."
-            )
-        else:
-            console.print(f"\n[green]Provider configured: {settings.provider}[/green]")
+        if report.has_failures:
+            raise typer.Exit(code=1)
 
     except ForgeError as exc:
         print_error(str(exc))

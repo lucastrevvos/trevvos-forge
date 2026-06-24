@@ -122,6 +122,8 @@ from trevvos_forge.test_runner import (
 )
 from trevvos_forge.test_apply_workflow import (
     TestApplyRequest,
+    find_best_tests_apply_session,
+    find_latest_validated_tests_add_session,
     render_tests_apply_result,
     run_tests_apply_workflow,
 )
@@ -4499,6 +4501,10 @@ def tests_apply(
         str | None,
         typer.Option("--session", "-s", help="Session ID to apply. Defaults to current session."),
     ] = None,
+    latest: Annotated[
+        bool,
+        typer.Option("--latest", help="Apply the latest validated tests add session."),
+    ] = False,
     yes: Annotated[
         bool,
         typer.Option("--yes", "-y", help="Apply without interactive confirmation."),
@@ -4515,6 +4521,22 @@ def tests_apply(
     """Apply a validated test patch from a previous dry-run session."""
     try:
         workspace_root = path.resolve()
+
+        if latest and session_id is None:
+            best, best_reason = find_best_tests_apply_session(workspace_root)
+            if best is None:
+                console.print("[red]No applicable validated test patch found.[/red]")
+                console.print(
+                    "\nValidated sessions may exist, but their patches no longer apply to the current working tree."
+                )
+                console.print("Run `trevvos tests add <source_path> --symbol <name>` first.")
+                raise typer.Exit(code=1)
+            session_id = best.metadata.id
+            if best_reason == "already_applied":
+                console.print("[yellow]Latest validated test patch already appears to be applied.[/yellow]")
+                console.print(f"Session: {session_id}")
+                console.print("Nothing to do.")
+                return
 
         if not yes:
             display_id = session_id or "current"

@@ -1440,6 +1440,133 @@ class OperationRetryTests(unittest.TestCase):
         self.assertIn("not found", rendered.lower())
 
 
+class MissingReplacementTests(unittest.TestCase):
+    """Tests that missing 'replacement' field in replace_exact_text triggers schema retry, not a raw crash."""
+
+    def _make_request(self, root: Path, *, max_generation_retries: int = 1) -> "TestAddRequest":
+        return TestAddRequest(
+            repo_root=root,
+            source_path="calculator.py",
+            symbol="divide",
+            all_symbols=False,
+            test_file=None,
+            unit=False,
+            e2e=False,
+            write=False,
+            yes=False,
+            force=False,
+            keep_sandbox=False,
+            max_generation_retries=max_generation_retries,
+            max_structure_retries=1,
+            max_sandbox_retries=1,
+            timeout=120,
+        )
+
+    def test_missing_replacement_triggers_schema_retry(self) -> None:
+        """replace_exact_text with 'insert' instead of 'replacement' triggers schema retry."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            bad = _create_missing_string_field_response(
+                operation="replace_exact_text", field_name="replacement", value_key="absent"
+            )
+            good = _create_test_file_response()
+            provider = _FakeProvider([bad, good])
+
+            result = run_tests_add_workflow(self._make_request(root), provider)
+
+            self.assertEqual(provider.call_count, 2)
+            self.assertTrue(
+                (result.session_path / "test_generation_error.json").exists(),
+                "test_generation_error.json must be saved on schema error",
+            )
+            self.assertNotIn(
+                result.status, {"error", "exception"},
+                "Result must not be a raw exception",
+            )
+
+    def test_missing_replacement_with_retry_succeeds(self) -> None:
+        """Schema retry after missing replacement produces a valid patch."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            bad = _create_missing_string_field_response(
+                operation="replace_exact_text", field_name="replacement", value_key="absent"
+            )
+            good = _create_test_file_response()
+            provider = _FakeProvider([bad, good])
+
+            result = run_tests_add_workflow(self._make_request(root), provider)
+
+            self.assertEqual(provider.call_count, 2)
+            self.assertNotEqual(result.status, "failed_test_generation_schema")
+            self.assertEqual(result.status, "test_diff_validated")
+
+    def test_missing_replacement_with_max_retries_zero(self) -> None:
+        """With max_generation_retries=0, missing replacement is a clean auditble failure."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            bad = _create_missing_string_field_response(
+                operation="replace_exact_text", field_name="replacement", value_key="absent"
+            )
+            provider = _FakeProvider(bad)
+
+            result = run_tests_add_workflow(
+                self._make_request(root, max_generation_retries=0), provider
+            )
+
+            self.assertEqual(provider.call_count, 1)
+            self.assertEqual(result.status, "failed_test_generation_schema")
+            self.assertTrue(
+                (result.session_path / "test_generation_error.json").exists(),
+                "test_generation_error.json must be saved even when retry is disabled",
+            )
+
+    def test_missing_replacement_in_structure_retry_does_not_crash(self) -> None:
+        """FileChangeOutputError in structure retry response must not escape as a raw crash."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            # First response: valid parse but fails structure validation (standalone test function)
+            bad_structure = _create_structure_retry_bad_response()
+            # Second response (structure retry): replace_exact_text with no 'replacement'
+            bad_schema = _create_missing_string_field_response(
+                operation="replace_exact_text", field_name="replacement", value_key="absent"
+            )
+            provider = _FakeProvider([bad_structure, bad_schema])
+
+            try:
+                result = run_tests_add_workflow(
+                    TestAddRequest(
+                        repo_root=root,
+                        source_path="calculator.py",
+                        symbol=None,
+                        all_symbols=True,
+                        test_file=None,
+                        unit=False,
+                        e2e=False,
+                        write=False,
+                        yes=False,
+                        force=False,
+                        keep_sandbox=False,
+                        max_generation_retries=1,
+                        max_structure_retries=1,
+                        max_sandbox_retries=1,
+                        timeout=120,
+                    ),
+                    provider,
+                )
+                raised = None
+            except Exception as exc:
+                raised = exc
+                result = None
+
+            self.assertIsNone(raised, f"Workflow must not raise a raw exception; got: {raised}")
+            self.assertIsNotNone(result)
+            self.assertIn(
+                result.status,
+                {"tests_add_failed", "failed_test_generation_schema", "test_diff_validated"},
+                f"Unexpected status: {result.status}",
+            )
+
+
 def _fake_result(root: Path):
     session_dir = root / ".trevvos" / "sessions" / "fake-session"
     session_dir.mkdir(parents=True, exist_ok=True)

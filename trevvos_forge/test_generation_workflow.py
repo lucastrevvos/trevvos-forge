@@ -626,6 +626,22 @@ def run_tests_add_workflow(
             write_session_json(session, "test_file_changes.json", current_file_changes.to_dict())
             write_session_json(session, "file_changes.json", current_file_changes.to_dict())
 
+        except FileChangeOutputError as exc:
+            error_payload = _build_generation_error_payload(exc, previous_raw_response)
+            _write_generation_error_artifacts(session, error_payload)
+            return _build_generation_failure_result(
+                session=session,
+                target=target,
+                prompt_template_ref=prompt_template.ref,
+                original_symbols=original_symbols,
+                existing_tests_check=existing_tests_check,
+                generation_retries=generation_retries,
+                generation_error=error_payload,
+                write=request.write,
+                command_text=command_text,
+                request=request,
+            )
+
     write_session_text(session, "test_diff.patch", unified_diff)
     write_session_text(session, "diff.patch", unified_diff)
 
@@ -2290,7 +2306,7 @@ def _run_structure_retry_attempt(
     try:
         retry_file_changes = parse_file_changes_output(raw_retry_response)
         validate_file_changes_are_tests_only(retry_file_changes)
-    except DiffError as exc:
+    except (DiffError, FileChangeOutputError) as exc:
         metadata = {
             "attempt": attempt,
             "status": "failed",

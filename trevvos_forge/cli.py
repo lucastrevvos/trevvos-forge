@@ -2,6 +2,7 @@ import ast
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -133,6 +134,7 @@ from trevvos_forge.test_apply_workflow import (
     render_tests_apply_result,
     run_tests_apply_workflow,
 )
+from trevvos_forge.progress_reporter import build_progress_reporter
 from trevvos_forge.test_generation_workflow import (
     TestAddRequest,
     render_test_add_result,
@@ -4632,6 +4634,10 @@ def tests_add(
         bool,
         typer.Option("--json", help="Output machine-readable metadata."),
     ] = False,
+    no_progress: Annotated[
+        bool,
+        typer.Option("--no-progress", help="Disable the spinner/progress indicator."),
+    ] = False,
     path: Annotated[
         Path,
         typer.Option("--path", "-p", help="Workspace root path."),
@@ -4678,8 +4684,10 @@ def tests_add(
         )
 
         provider_factory = lambda: build_provider(load_settings())
-        with console.status("[bold]Generating test file changes with your local LLM...[/bold]", spinner="dots"):
-            result = run_tests_add_workflow(request, provider_factory=provider_factory)
+        show_progress = not no_progress and not json_output and sys.stdout.isatty()
+        reporter = build_progress_reporter(enabled=show_progress, console=console)
+        with reporter:
+            result = run_tests_add_workflow(request, provider_factory=provider_factory, progress_reporter=reporter)
 
         render_test_add_result(result=result, json_output=json_output, console=console)
         if result.exit_code != 0:

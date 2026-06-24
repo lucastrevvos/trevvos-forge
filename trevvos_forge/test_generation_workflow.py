@@ -7,6 +7,8 @@ from typing import Any, Callable, Protocol
 import typer
 
 from trevvos_forge.apply_patch import apply_patch, check_patch
+from trevvos_forge.execution_tracker import ExecutionTracker
+from trevvos_forge.progress_reporter import NoopProgressReporter
 from trevvos_forge.retry_budget import RetryBudget
 from trevvos_forge.commit_workflow import extract_patch_paths
 from trevvos_forge.diff_builder import build_unified_diff_from_file_changes
@@ -108,7 +110,13 @@ def run_tests_add_workflow(
     request: TestAddRequest,
     provider: Provider | None = None,
     provider_factory: Callable[[], Provider] | None = None,
+    progress_reporter: Any | None = None,
 ) -> TestAddResult:
+    reporter = progress_reporter if progress_reporter is not None else NoopProgressReporter()
+    tracker = ExecutionTracker()
+    tracker.start_stage("prepare_context", "Preparing test generation context")
+    reporter.start_stage("Preparing test generation context...")
+
     workspace_root = request.repo_root.resolve()
     target = build_test_generation_target(
         workspace_root=workspace_root,
@@ -136,7 +144,13 @@ def run_tests_add_workflow(
     existing_tests_check = build_existing_tests_check(target=target, test_file_content=test_content)
     write_session_json(session, "existing_tests_check.json", existing_tests_check.to_dict())
 
+    tracker.finish_stage("prepare_context")
+    tracker.start_stage("check_existing_tests", "Checking existing tests")
+    reporter.start_stage("Checking existing tests...")
+
     if not request.force and existing_tests_check.status == "all_covered":
+        tracker.finish_stage("check_existing_tests", "skipped")
+        execution = tracker.to_dict()
         metadata = metadata_for_target(
             target=target,
             write=request.write,
@@ -147,6 +161,7 @@ def run_tests_add_workflow(
             symbols_original=original_symbols,
             provider_called=False,
             write_allowed=False,
+            execution=execution,
         )
         write_session_json(session, "test_generation_metadata.json", metadata)
         write_session_text(
@@ -158,6 +173,7 @@ def run_tests_add_workflow(
                 write=request.write,
                 status="skipped_existing_tests",
                 existing_tests_check=existing_tests_check,
+                execution=execution,
             ),
         )
         session = update_session_status(session, "skipped_existing_tests")
@@ -205,6 +221,8 @@ def run_tests_add_workflow(
             [symbol for symbol in target.symbols if symbol.name in missing_names],
         )
 
+    tracker.finish_stage("check_existing_tests")
+
     prompt_context = build_test_generation_context(
         workspace_root=workspace_root,
         target=target,
@@ -225,6 +243,8 @@ def run_tests_add_workflow(
         ),
     )
 
+    tracker.start_stage("generate_tests", "Generating tests")
+    reporter.start_stage("Generating tests...")
     actual_provider = provider if provider is not None else _resolve_provider(provider_factory)
     raw_response = actual_provider.generate(prompt)
     write_session_text(session, "test_generation_raw_response.json", raw_response)
@@ -241,6 +261,7 @@ def run_tests_add_workflow(
         except (WorkspaceError, DiffError) as exc:
             generation_error = _build_generation_guardrail_error_payload(exc, raw_response)
             write_session_json(session, "test_generation_validation.json", generation_error)
+            tracker.fail_stage("generate_tests", "guardrail_failure")
             return _build_generation_guardrail_failure_result(
                 session=session,
                 target=target,
@@ -251,6 +272,7 @@ def run_tests_add_workflow(
                 guardrail_error=generation_error,
                 write=request.write,
                 command_text=command_text,
+                execution=tracker.to_dict(),
             )
         except Exception as exc:
             if not _is_generation_schema_error(exc):
@@ -260,6 +282,7 @@ def run_tests_add_workflow(
 
             if not generation_retries.can_retry():
                 generation_retries.mark_failed_after_retries()
+                tracker.fail_stage("generate_tests", "schema_failure")
                 return _build_generation_failure_result(
                     session=session,
                     target=target,
@@ -271,6 +294,7 @@ def run_tests_add_workflow(
                     write=request.write,
                     command_text=command_text,
                     request=request,
+                    execution=tracker.to_dict(),
                 )
 
             attempt = generation_retries.consume()
@@ -296,6 +320,7 @@ def run_tests_add_workflow(
             except (WorkspaceError, DiffError) as retry_guardrail_exc:
                 generation_error = _build_generation_guardrail_error_payload(retry_guardrail_exc, retry_raw_response)
                 write_session_json(session, "test_generation_validation.json", generation_error)
+                tracker.fail_stage("generate_tests", "guardrail_failure")
                 return _build_generation_guardrail_failure_result(
                     session=session,
                     target=target,
@@ -306,6 +331,7 @@ def run_tests_add_workflow(
                     guardrail_error=generation_error,
                     write=request.write,
                     command_text=command_text,
+                    execution=tracker.to_dict(),
                 )
             except Exception as retry_exc:
                 if not _is_generation_schema_error(retry_exc):
@@ -333,6 +359,7 @@ def run_tests_add_workflow(
                 generation_error = retry_error
                 if not generation_retries.can_retry():
                     generation_retries.mark_failed_after_retries()
+                    tracker.fail_stage("generate_tests", "schema_failure")
                     return _build_generation_failure_result(
                         session=session,
                         target=target,
@@ -344,6 +371,7 @@ def run_tests_add_workflow(
                         write=request.write,
                         command_text=command_text,
                         request=request,
+                        execution=tracker.to_dict(),
                     )
                 continue
 
@@ -371,6 +399,10 @@ def run_tests_add_workflow(
     current_file_changes = file_changes
     if generation_retries.used > 0:
         generation_retries.mark_succeeded_after_retry()
+
+    tracker.finish_stage("generate_tests")
+    tracker.start_stage("validate_and_repair", "Validating generated tests")
+    reporter.start_stage("Validating generated tests...")
 
     operation_retries = RetryBudget(max=request.max_generation_retries)
     operation_error: dict | None = None
@@ -469,6 +501,8 @@ def run_tests_add_workflow(
             files_changed = [change.path for change in current_file_changes.changes]
 
             if structure_validation["status"] == "failed":
+                tracker.fail_stage("validate_and_repair", "failed_test_structure_validation")
+                execution = tracker.to_dict()
                 metadata = metadata_for_target(
                     target=target,
                     write=request.write,
@@ -484,6 +518,7 @@ def run_tests_add_workflow(
                     symbols_original=original_symbols,
                     provider_called=True,
                     write_allowed=False,
+                    execution=execution,
                 )
                 write_session_json(session, "test_generation_metadata.json", metadata)
                 write_session_text(
@@ -500,6 +535,7 @@ def run_tests_add_workflow(
                         unittest_method_repair=unittest_method_repair,
                         import_repair=import_repair,
                         structure_retries=structure_retries,
+                        execution=execution,
                     ),
                 )
                 session = update_session_status(session, "tests_add_failed")
@@ -567,7 +603,7 @@ def run_tests_add_workflow(
             )
             if operation_retries.used > 0:
                 operation_retries.mark_succeeded_after_retry()
-            break
+            break  # validate_and_repair succeeded
 
         except DiffError as exc:
             if not _is_operation_error(exc):
@@ -577,6 +613,7 @@ def run_tests_add_workflow(
 
             if not operation_retries.can_retry():
                 operation_retries.mark_failed_after_retries()
+                tracker.fail_stage("validate_and_repair", "operation_target_not_found")
                 return _build_operation_failure_result(
                     session=session,
                     target=target,
@@ -588,6 +625,7 @@ def run_tests_add_workflow(
                     operation_error=operation_error,
                     write=request.write,
                     command_text=command_text,
+                    execution=tracker.to_dict(),
                 )
 
             attempt = operation_retries.consume()
@@ -606,6 +644,7 @@ def run_tests_add_workflow(
             )
             if retry_result["status"] == "failed":
                 operation_retries.mark_failed_after_retries()
+                tracker.fail_stage("validate_and_repair", "operation_target_not_found")
                 return _build_operation_failure_result(
                     session=session,
                     target=target,
@@ -617,6 +656,7 @@ def run_tests_add_workflow(
                     operation_error=operation_error,
                     write=request.write,
                     command_text=command_text,
+                    execution=tracker.to_dict(),
                 )
 
             current_file_changes = retry_result["file_changes"]
@@ -626,6 +666,7 @@ def run_tests_add_workflow(
         except FileChangeOutputError as exc:
             error_payload = _build_generation_error_payload(exc, previous_raw_response)
             _write_generation_error_artifacts(session, error_payload)
+            tracker.fail_stage("validate_and_repair", "file_change_output_error")
             return _build_generation_failure_result(
                 session=session,
                 target=target,
@@ -637,7 +678,12 @@ def run_tests_add_workflow(
                 write=request.write,
                 command_text=command_text,
                 request=request,
+                execution=tracker.to_dict(),
             )
+
+    tracker.finish_stage("validate_and_repair")
+    tracker.start_stage("build_patch", "Building test patch")
+    reporter.start_stage("Building test patch...")
 
     write_session_text(session, "test_diff.patch", unified_diff)
     write_session_text(session, "diff.patch", unified_diff)
@@ -658,6 +704,10 @@ def run_tests_add_workflow(
         "diff_check.json",
         {"git_apply_check": "passed", "patch_path": str(session.path / "test_diff.patch")},
     )
+
+    tracker.finish_stage("build_patch")
+    tracker.start_stage("sandbox", "Running sandbox tests")
+    reporter.start_stage("Running sandbox tests...")
 
     test_commands, command_source, symbol_selector = select_test_generation_commands(
         workspace_root=workspace_root,
@@ -714,6 +764,8 @@ def run_tests_add_workflow(
         patch_apply=sandbox_metadata.get("patch_apply", "unknown"),
     )
 
+    tracker.finish_stage("sandbox", "passed" if sandbox_result.status == "passed" else "failed")
+    execution = tracker.to_dict()
     write_allowed = sandbox_result.status == "passed"
     metadata = metadata_for_target(
         target=target,
@@ -736,6 +788,7 @@ def run_tests_add_workflow(
         symbols_original=original_symbols,
         provider_called=True,
         write_allowed=write_allowed,
+        execution=execution,
     )
     write_session_json(session, "test_generation_metadata.json", metadata)
     write_session_text(
@@ -754,6 +807,7 @@ def run_tests_add_workflow(
             unittest_method_repair=unittest_method_repair,
             import_repair=import_repair,
             structure_retries=structure_retries,
+            execution=execution,
         ),
     )
 
@@ -815,6 +869,7 @@ def run_tests_add_workflow(
                         command_text=command_text,
                         request=request,
                         message="[red]Sandbox tests failed after retry.[/red]",
+                        execution=execution,
                     )
                 continue
 
@@ -875,6 +930,7 @@ def run_tests_add_workflow(
                 structure_retries=retry_structure_retries,
                 original_symbols=original_symbols,
                 sandbox_retries=sandbox_retries,
+                execution=execution,
             )
             sandbox_result = retry_finalization["sandbox_result"]
             metadata = retry_finalization["metadata"]
@@ -912,6 +968,7 @@ def run_tests_add_workflow(
                     command_text=command_text,
                     request=request,
                     message="[red]Sandbox tests failed after retry.[/red]",
+                    execution=execution,
                 )
 
     if sandbox_result.status != "passed":
@@ -930,6 +987,7 @@ def run_tests_add_workflow(
             command_text=command_text,
             request=request,
             message="[red]Sandbox tests failed.[/red]",
+            execution=execution,
         )
 
     if not request.write:
@@ -1205,6 +1263,7 @@ def render_test_add_result(*, result: TestAddResult, json_output: bool, console:
         console.print(f"  - {result.session_path / 'test_apply_result.json'}")
         console.print("\n[bold]Next[/bold]")
         console.print(f"  {result.next_command or 'python -m unittest discover -s tests'}")
+        _render_duration(result=result, console=console)
         return
 
     console.print(result.message)
@@ -1257,6 +1316,14 @@ def render_test_add_result(*, result: TestAddResult, json_output: bool, console:
         console.print("  or inspect test_diff.patch before applying.")
     else:
         console.print("  Review test_sandbox_output.log before writing.")
+    _render_duration(result=result, console=console)
+
+
+def _render_duration(*, result: TestAddResult, console: Any) -> None:
+    metadata = result.metadata if isinstance(result.metadata, dict) else {}
+    duration = metadata.get("duration_seconds")
+    if duration is not None:
+        console.print(f"\nDuration: {duration:.2f}s")
 
 
 def _build_command_text(*, target: TestGenerationTarget, write: bool) -> str:
@@ -1507,6 +1574,7 @@ def _build_generation_failure_result(
     write: bool,
     command_text: str,
     request: TestAddRequest,
+    execution: dict | None = None,
 ) -> TestAddResult:
     metadata = metadata_for_target(
         target=target,
@@ -1519,6 +1587,7 @@ def _build_generation_failure_result(
         symbols_original=original_symbols,
         provider_called=True,
         write_allowed=False,
+        execution=execution,
     )
     write_session_json(session, "test_generation_metadata.json", metadata)
     write_session_text(
@@ -1531,6 +1600,7 @@ def _build_generation_failure_result(
             status="failed_test_generation_schema",
             existing_tests_check=existing_tests_check,
             generation_retries=generation_retries,
+            execution=execution,
         ),
     )
     session = update_session_status(session, "tests_add_failed")
@@ -1615,6 +1685,7 @@ def _build_generation_guardrail_failure_result(
     guardrail_error: dict,
     write: bool,
     command_text: str,
+    execution: dict | None = None,
 ) -> TestAddResult:
     metadata = metadata_for_target(
         target=target,
@@ -1627,6 +1698,7 @@ def _build_generation_guardrail_failure_result(
         symbols_original=original_symbols,
         provider_called=True,
         write_allowed=False,
+        execution=execution,
     )
     write_session_json(session, "test_generation_metadata.json", metadata)
     write_session_text(
@@ -1639,6 +1711,7 @@ def _build_generation_guardrail_failure_result(
             status="failed_test_generation_guardrail",
             existing_tests_check=existing_tests_check,
             generation_retries=generation_retries,
+            execution=execution,
         ),
     )
     session = update_session_status(session, "tests_add_failed")
@@ -1695,6 +1768,7 @@ def _finalize_sandbox_stage(
     structure_retries: dict,
     original_symbols: list[str],
     sandbox_retries: dict,
+    execution: dict | None = None,
 ) -> dict:
     diff_warnings: list[str] = []
     unified_diff = build_unified_diff_from_file_changes(
@@ -1798,6 +1872,7 @@ def _finalize_sandbox_stage(
         symbols_original=original_symbols,
         provider_called=True,
         write_allowed=write_allowed,
+        execution=execution,
     )
     write_session_json(session, "test_generation_metadata.json", metadata)
     write_session_text(
@@ -1815,6 +1890,7 @@ def _finalize_sandbox_stage(
             unittest_method_repair=unittest_method_repair,
             import_repair=import_repair,
             structure_retries=structure_retries,
+            execution=execution,
         ),
     )
 
@@ -1910,6 +1986,7 @@ def _build_sandbox_failure_result(
     command_text: str,
     request: TestAddRequest,
     message: str,
+    execution: dict | None = None,
 ) -> TestAddResult:
     metadata = metadata_for_target(
         target=target,
@@ -1924,6 +2001,7 @@ def _build_sandbox_failure_result(
         symbols_original=original_symbols,
         provider_called=True,
         write_allowed=False,
+        execution=execution,
     )
     write_session_json(session, "test_generation_metadata.json", metadata)
     write_session_text(
@@ -1938,6 +2016,7 @@ def _build_sandbox_failure_result(
             generation_retries=generation_retries,
             sandbox_retries=sandbox_retries,
             unittest_method_repair=unittest_method_repair,
+            execution=execution,
         ),
     )
     session = update_session_status(session, "tests_add_failed")
@@ -2761,6 +2840,7 @@ def _build_operation_failure_result(
     operation_error: dict,
     write: bool,
     command_text: str,
+    execution: dict | None = None,
 ) -> TestAddResult:
     metadata = metadata_for_target(
         target=target,
@@ -2774,6 +2854,7 @@ def _build_operation_failure_result(
         symbols_original=original_symbols,
         provider_called=True,
         write_allowed=False,
+        execution=execution,
     )
     write_session_json(session, "test_generation_metadata.json", metadata)
     write_session_text(
@@ -2787,6 +2868,7 @@ def _build_operation_failure_result(
             existing_tests_check=existing_tests_check,
             generation_retries=generation_retries,
             operation_retries=operation_retries,
+            execution=execution,
         ),
     )
     session = update_session_status(session, "tests_add_failed")

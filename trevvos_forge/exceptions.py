@@ -22,6 +22,10 @@ class ProviderHttpError(ProviderError):
     """Raised when a provider returns an HTTP error."""
 
 
+class ProviderConfigurationError(ProviderError):
+    """Raised when provider configuration is invalid or unsupported."""
+
+
 class ConfigurationError(ForgeError):
     """Raised when Trevvos Forge configuration is invalid."""
 

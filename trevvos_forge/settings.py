@@ -8,12 +8,14 @@ class ForgeSettings:
     model: str
     base_url: str
     timeout: int
+    provider: str = "ollama"
 
     @classmethod
     def from_env(cls) -> "ForgeSettings":
         model = os.getenv("TREVVOS_FORGE_MODEL","qwen2.5-coder:7b")
         base_url = os.getenv("TREVVOS_FORGE_BASE_URL","http://localhost:11434")
         timeout_raw = os.getenv("TREVVOS_FORGE_TIMEOUT", "320")
+        provider = os.getenv("TREVVOS_FORGE_PROVIDER", "ollama")
 
         try:
             timeout = int(timeout_raw)
@@ -30,5 +32,6 @@ class ForgeSettings:
         return cls(
             model=model,
             base_url=base_url.rstrip("/"),
-            timeout=timeout
+            timeout=timeout,
+            provider=provider,
         )

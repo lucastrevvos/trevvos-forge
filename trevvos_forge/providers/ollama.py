@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import ClassVar
 
 import requests
 
@@ -11,6 +12,7 @@ from trevvos_forge.exceptions import (
 
 @dataclass
 class OllamaProvider:
+    name: ClassVar[str] = "ollama"
     model: str
     base_url: str = "http://localhost:11434"
     timeout: int = 120

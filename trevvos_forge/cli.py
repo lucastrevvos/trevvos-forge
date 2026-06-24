@@ -64,6 +64,7 @@ from trevvos_forge.project_scanner import (
     save_project_profile,
     scan_project,
 )
+from trevvos_forge.providers.factory import build_provider as _build_provider_factory
 from trevvos_forge.providers.ollama import OllamaProvider
 from trevvos_forge.review_artifacts import (
     build_change_summary_markdown,
@@ -344,11 +345,7 @@ def _resolve_language(repo_root: Path, requested_language: str | None) -> str:
 
 
 def build_provider(settings: ForgeSettings) -> OllamaProvider:
-    return OllamaProvider(
-        model=settings.model,
-        base_url=settings.base_url,
-        timeout=settings.timeout,
-    )
+    return _build_provider_factory(settings)  # type: ignore[return-value]
 
 
 def build_engine() -> TrevvosForgeEngine:

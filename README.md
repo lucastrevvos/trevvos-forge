@@ -69,7 +69,7 @@ See [docs/alpha-quickstart.md](docs/alpha-quickstart.md) for full step-by-step g
 Clone and install in editable mode:
 
 ```bash
-git clone https://github.com/your-org/trevvos-forge.git
+git clone https://github.com/lucastrevvos/trevvos-forge.git
 cd trevvos-forge
 python -m venv .venv
 source .venv/bin/activate        # Linux/macOS
@@ -172,6 +172,7 @@ python -m unittest discover -s tests
 ```
 
 The flow:
+
 1. `tests inspect` — shows coverage without calling the provider.
 2. `tests add` — generates a test patch, runs it in a sandbox, saves artifacts. Does **not** modify the working tree by default.
 3. `tests apply` — applies the already-validated patch. No LLM call at apply time.
@@ -195,31 +196,31 @@ Review generated diffs carefully before applying. See [docs/execution-mode.md](d
 
 ## Commands
 
-| Command | Mode | Modifies code? | Purpose |
-|---|---|---:|---|
-| `trevvos setup` | Setup | No | Create or update .trevvos/config.json interactively or non-interactively |
-| `trevvos doctor` | Advisory | No | Diagnose provider, runtime, and connectivity |
-| `trevvos inspect` | Advisory | No | Scan project structure and save a project profile |
-| `trevvos analyze` | Advisory | No | Analyze code quality, risks, tests, and architecture |
-| `trevvos explain` | Advisory | No | Explain files, symbols, and execution flows |
-| `trevvos propose` | Advisory | No | Generate a technical proposal before implementation |
-| `trevvos spec` | Advisory | No | Generate an implementation handoff prompt for external AI |
-| `trevvos review-diff` | Advisory | No | Review local git diffs before commit |
-| `trevvos tests inspect` | Advisory | No | Inspect detected test coverage by source symbol |
-| `trevvos tests add` | Controlled Testing | No (sandbox only) | Generate test patch, validate in sandbox, save artifacts |
-| `trevvos tests apply` | Controlled Testing | Yes, tests only | Apply an already-validated test patch |
-| `trevvos sessions list` | Utility | No | List local sessions |
-| `trevvos sessions export` | Utility | No | Export session as ZIP or JSON with secrets masked |
-| `trevvos api start` | Utility | No | Start local read-only API server and dashboard |
-| `trevvos runtime status` | Utility | No | Show runtime status |
-| `trevvos runtime start` | Utility | No | Start managed runtime (Ollama) |
-| `trevvos plan` | Execution | No | Plan code changes |
-| `trevvos diff` | Execution | No | Generate and validate a patch |
-| `trevvos test` | Execution | No | Run verification commands |
-| `trevvos repair` | Execution | No | Generate a repair diff for a failed session |
-| `trevvos apply` | Execution | Yes | Apply a validated patch after confirmation |
-| `trevvos commit` | Execution | Yes | Commit related changes |
-| `trevvos work` | Execution | No by default | Run a controlled experimental agent loop up to ready-to-apply |
+| Command                   | Mode               |    Modifies code? | Purpose                                                                  |
+| ------------------------- | ------------------ | ----------------: | ------------------------------------------------------------------------ |
+| `trevvos setup`           | Setup              |                No | Create or update .trevvos/config.json interactively or non-interactively |
+| `trevvos doctor`          | Advisory           |                No | Diagnose provider, runtime, and connectivity                             |
+| `trevvos inspect`         | Advisory           |                No | Scan project structure and save a project profile                        |
+| `trevvos analyze`         | Advisory           |                No | Analyze code quality, risks, tests, and architecture                     |
+| `trevvos explain`         | Advisory           |                No | Explain files, symbols, and execution flows                              |
+| `trevvos propose`         | Advisory           |                No | Generate a technical proposal before implementation                      |
+| `trevvos spec`            | Advisory           |                No | Generate an implementation handoff prompt for external AI                |
+| `trevvos review-diff`     | Advisory           |                No | Review local git diffs before commit                                     |
+| `trevvos tests inspect`   | Advisory           |                No | Inspect detected test coverage by source symbol                          |
+| `trevvos tests add`       | Controlled Testing | No (sandbox only) | Generate test patch, validate in sandbox, save artifacts                 |
+| `trevvos tests apply`     | Controlled Testing |   Yes, tests only | Apply an already-validated test patch                                    |
+| `trevvos sessions list`   | Utility            |                No | List local sessions                                                      |
+| `trevvos sessions export` | Utility            |                No | Export session as ZIP or JSON with secrets masked                        |
+| `trevvos api start`       | Utility            |                No | Start local read-only API server and dashboard                           |
+| `trevvos runtime status`  | Utility            |                No | Show runtime status                                                      |
+| `trevvos runtime start`   | Utility            |                No | Start managed runtime (Ollama)                                           |
+| `trevvos plan`            | Execution          |                No | Plan code changes                                                        |
+| `trevvos diff`            | Execution          |                No | Generate and validate a patch                                            |
+| `trevvos test`            | Execution          |                No | Run verification commands                                                |
+| `trevvos repair`          | Execution          |                No | Generate a repair diff for a failed session                              |
+| `trevvos apply`           | Execution          |               Yes | Apply a validated patch after confirmation                               |
+| `trevvos commit`          | Execution          |               Yes | Commit related changes                                                   |
+| `trevvos work`            | Execution          |     No by default | Run a controlled experimental agent loop up to ready-to-apply            |
 
 ---
 
@@ -367,14 +368,14 @@ Forge stores project configuration in `.trevvos/config.json`. Use `trevvos setup
 
 ### Environment Variables
 
-| Variable | Purpose |
-|---|---|
+| Variable                 | Purpose                                   |
+| ------------------------ | ----------------------------------------- |
 | `TREVVOS_FORGE_PROVIDER` | Provider: `ollama` or `openai-compatible` |
-| `TREVVOS_FORGE_RUNTIME` | Runtime: `ollama` or `external` |
-| `TREVVOS_FORGE_BASE_URL` | Provider base URL |
-| `TREVVOS_FORGE_MODEL` | Model name |
-| `TREVVOS_FORGE_API_KEY` | API key (preferred over saving in config) |
-| `TREVVOS_FORGE_TIMEOUT` | Request timeout in seconds (default: 320) |
+| `TREVVOS_FORGE_RUNTIME`  | Runtime: `ollama` or `external`           |
+| `TREVVOS_FORGE_BASE_URL` | Provider base URL                         |
+| `TREVVOS_FORGE_MODEL`    | Model name                                |
+| `TREVVOS_FORGE_API_KEY`  | API key (preferred over saving in config) |
+| `TREVVOS_FORGE_TIMEOUT`  | Request timeout in seconds (default: 320) |
 
 Environment variables override `.trevvos/config.json`.
 

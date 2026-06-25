@@ -269,12 +269,19 @@ runtime_app = typer.Typer(
     no_args_is_help=True,
 )
 
+api_app = typer.Typer(
+    name="api",
+    help="Forge Local API server.",
+    no_args_is_help=True,
+)
+
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(prompts_app, name="prompts")
 app.add_typer(config_app, name="config")
 app.add_typer(models_app, name="models")
 app.add_typer(tests_app, name="tests")
 app.add_typer(runtime_app, name="runtime")
+app.add_typer(api_app, name="api")
 
 console = Console()
 err_console = Console(stderr=True)
@@ -1527,6 +1534,61 @@ def runtime_stop(
     except ForgeError as exc:
         print_error(str(exc))
         raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# api subcommand
+# ---------------------------------------------------------------------------
+
+_API_ENDPOINTS = [
+    "GET /health",
+    "GET /project/profile",
+    "GET /config",
+    "GET /sessions",
+    "GET /sessions/{session_id}",
+    "GET /sessions/{session_id}/artifacts",
+    "GET /sessions/{session_id}/artifacts/{artifact_name}",
+]
+
+
+@api_app.command("start")
+def api_start(
+    host: Annotated[
+        str,
+        typer.Option("--host", help="Host to bind the API server."),
+    ] = "127.0.0.1",
+    port: Annotated[
+        int,
+        typer.Option("--port", help="Port to bind the API server."),
+    ] = 8765,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """Start the Forge Local API server (read-only, localhost only)."""
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        console.print(
+            "[yellow]Warning: exposing Forge Local API on a non-loopback host "
+            "may expose project artifacts to the network.[/yellow]"
+        )
+
+    workspace_root = path.resolve()
+
+    console.print("[bold]Trevvos Forge Local API[/bold]\n")
+    console.print(f"Workspace: {workspace_root}")
+    console.print(f"Data:      .trevvos")
+    console.print(f"URL:       http://{host}:{port}")
+    console.print("\nEndpoints:")
+    for ep in _API_ENDPOINTS:
+        console.print(f"  {ep}")
+    console.print(f"\n[dim]Press Ctrl+C to stop.[/dim]\n")
+
+    from trevvos_forge.local_api.app import run_server
+    try:
+        run_server(workspace_root=workspace_root, host=host, port=port)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Server stopped.[/yellow]")
 
 
 @app.command()

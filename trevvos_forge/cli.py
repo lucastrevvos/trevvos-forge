@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Annotated
 
+from trevvos_forge.version import __version__
+
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -291,12 +293,35 @@ def print_error(message: str) -> None:
     err_console.print(f"[red][trevvos-forge][/red] {message}")
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        print(f"Trevvos Forge {__version__}")
+        raise typer.Exit()
+
+
 @app.callback()
-def callback() -> None:
+def callback(
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            "-V",
+            callback=_version_callback,
+            is_eager=True,
+            help="Show version and exit.",
+        ),
+    ] = False,
+) -> None:
     """
     Trevvos Forge CLI.
     """
     pass
+
+
+@app.command("version")
+def version_command() -> None:
+    """Show the Trevvos Forge version."""
+    print(f"Trevvos Forge {__version__}")
 
 
 @config_app.command("show")

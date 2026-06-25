@@ -94,11 +94,38 @@ trevvos analyze <file>
 
 ---
 
+## Binary Build
+
+```bash
+# Windows
+.\packaging\build_windows.ps1
+
+# Linux (or GitHub Actions)
+chmod +x packaging/build_linux.sh
+./packaging/build_linux.sh
+
+# Checksums
+python packaging/build_release.py
+```
+
+- [ ] Windows binary builds without errors
+- [ ] Linux binary builds without errors
+- [ ] `trevvos.exe --version` / `trevvos --version` shows `0.1.0-alpha.1`
+- [ ] `trevvos.exe setup --help` shows expected options
+- [ ] `trevvos.exe api start --help` shows `--open` and `--port`
+- [ ] `SHA256SUMS.txt` generated
+- [ ] Smoke test outside the repo (no Python, no venv): `trevvos setup`, `trevvos inspect`, `trevvos api start --port 8765`
+
+---
+
 ## Release Logistics
 
-- [ ] Git tag created (e.g. `alpha-01`)
+- [ ] Git tag created: `v0.1.0-alpha.1`
+- [ ] GitHub Release created (Pre-release)
+- [ ] Release assets uploaded: Windows ZIP, Linux tar.gz, SHA256SUMS.txt
 - [ ] Testers selected (2–5 developers)
 - [ ] Testers briefed on scope (advisory + controlled testing; no execution mode)
+- [ ] Testers given the GitHub Release URL
 - [ ] Feedback channel ready (issue tracker, Slack, email, or similar)
 - [ ] Point of contact for tester questions identified
 - [ ] Estimated Alpha duration communicated to testers

@@ -27,15 +27,37 @@ Do not test these unless specifically guided:
 
 ---
 
+## Installation
+
+Download the standalone binary for your OS from the GitHub Release — no Python, Git, or pip required.
+
+**Windows x64:**
+
+```powershell
+# Download trevvos-forge-v0.1.0-alpha.1-windows-x64.zip from the release
+Expand-Archive -Path trevvos-forge-v0.1.0-alpha.1-windows-x64.zip -DestinationPath trevvos
+cd trevvos
+.\trevvos.exe --version
+```
+
+**Linux x64:**
+
+```bash
+# Download trevvos-forge-v0.1.0-alpha.1-linux-x64.tar.gz from the release
+tar -xzf trevvos-forge-v0.1.0-alpha.1-linux-x64.tar.gz
+cd trevvos
+./trevvos --version
+```
+
+See [docs/alpha-quickstart.md](docs/alpha-quickstart.md) for detailed setup guides.
+
+---
+
 ## Quick Start
 
 ```bash
-# 1. Install
-git clone https://github.com/your-org/trevvos-forge.git
-cd trevvos-forge
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
+# 1. Extract the binary (see Installation above)
+cd trevvos
 
 # 2. Set up for your project
 cd path/to/your/project

@@ -2,11 +2,58 @@
 
 This guide walks you through getting Trevvos Forge running against a real project, from installation to your first advisory and test generation session.
 
+---
+
+## Installing the Standalone Binary (Recommended for Alpha)
+
+Download the standalone binary from the GitHub Release — **no Python, Git, or pip required**.
+
+**Windows x64:**
+
+```powershell
+# 1. Download trevvos-forge-v0.1.0-alpha.1-windows-x64.zip from the release
+# 2. Extract it
+Expand-Archive -Path trevvos-forge-v0.1.0-alpha.1-windows-x64.zip -DestinationPath trevvos
+cd trevvos
+.\trevvos.exe --version
+.\trevvos.exe --help
+```
+
+**Linux x64:**
+
+```bash
+# 1. Download trevvos-forge-v0.1.0-alpha.1-linux-x64.tar.gz from the release
+# 2. Extract it
+tar -xzf trevvos-forge-v0.1.0-alpha.1-linux-x64.tar.gz
+cd trevvos
+./trevvos --version
+./trevvos --help
+```
+
+After extraction, continue with your provider setup below. The `trevvos` (or `trevvos.exe`) binary is the same for all scenarios.
+
+---
+
+## Installing from Source (For Contributors)
+
+If you prefer to install from source (requires Python 3.11+ and Git):
+
+```bash
+git clone https://github.com/your-org/trevvos-forge.git
+cd trevvos-forge
+python -m venv .venv
+source .venv/bin/activate        # Linux/macOS
+# .\.venv\Scripts\Activate.ps1  # Windows PowerShell
+python -m pip install -e .
+trevvos --version
+```
+
+---
+
 ## Prerequisites
 
-- Python 3.11+
-- Git
 - An LLM server: Ollama (local, recommended) or any OpenAI-compatible endpoint
+- Python 3.11+ only required if installing from source
 
 ---
 

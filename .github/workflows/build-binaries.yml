@@ -1,0 +1,78 @@
+name: Build Binaries
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-windows:
+    name: Build Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build Windows binary
+        shell: pwsh
+        run: .\packaging\build_windows.ps1
+
+      - name: Generate checksums
+        shell: pwsh
+        run: python packaging\build_release.py
+
+      - name: Upload Windows ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: trevvos-forge-windows-x64
+          path: release/*.zip
+          if-no-files-found: error
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: sha256sums-windows
+          path: release/SHA256SUMS.txt
+          if-no-files-found: warn
+
+  build-linux:
+    name: Build Linux x64
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build Linux binary
+        run: |
+          chmod +x packaging/build_linux.sh
+          ./packaging/build_linux.sh
+
+      - name: Generate checksums
+        run: python packaging/build_release.py
+
+      - name: Upload Linux tar.gz
+        uses: actions/upload-artifact@v4
+        with:
+          name: trevvos-forge-linux-x64
+          path: release/*.tar.gz
+          if-no-files-found: error
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: sha256sums-linux
+          path: release/SHA256SUMS.txt
+          if-no-files-found: warn

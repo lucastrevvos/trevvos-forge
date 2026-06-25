@@ -67,6 +67,7 @@ from trevvos_forge.project_scanner import (
 )
 from trevvos_forge.doctor import DoctorCheck, DoctorReport, run_doctor
 from trevvos_forge.providers.factory import build_provider as _build_provider_factory
+from trevvos_forge.runtimes.factory import build_runtime_manager
 from trevvos_forge.providers.ollama import OllamaProvider
 from trevvos_forge.providers.openai_compatible import OpenAICompatibleProvider
 from trevvos_forge.review_artifacts import (
@@ -262,11 +263,18 @@ tests_app = typer.Typer(
     no_args_is_help=True,
 )
 
+runtime_app = typer.Typer(
+    name="runtime",
+    help="Manage local AI runtimes (status, start, stop).",
+    no_args_is_help=True,
+)
+
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(prompts_app, name="prompts")
 app.add_typer(config_app, name="config")
 app.add_typer(models_app, name="models")
 app.add_typer(tests_app, name="tests")
+app.add_typer(runtime_app, name="runtime")
 
 console = Console()
 err_console = Console(stderr=True)
@@ -1397,6 +1405,125 @@ def doctor(
         if report.has_failures:
             raise typer.Exit(code=1)
 
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# runtime subcommands
+# ---------------------------------------------------------------------------
+
+def _render_runtime_status(
+    status: "Any",
+    duration: float,
+    json_output: bool,
+) -> None:
+    if json_output:
+        d = status.to_dict()
+        d["action"] = "status"
+        d["duration_seconds"] = duration
+        print(json.dumps(d, indent=2))
+        return
+    console.print("[bold]Runtime status[/bold]\n")
+    console.print(f"Runtime:  {status.runtime}")
+    if status.base_url:
+        console.print(f"Base URL: {status.base_url}")
+    running_label = (
+        "running" if status.is_running is True
+        else "not running" if status.is_running is False
+        else "unknown"
+    )
+    console.print(f"Status:   {running_label}")
+    console.print(f"Message:  {status.message}")
+    console.print(f"\nDuration: {duration:.2f}s")
+
+
+def _render_runtime_action(
+    result: "Any",
+    duration: float,
+    json_output: bool,
+) -> None:
+    if json_output:
+        d = result.to_dict()
+        d["duration_seconds"] = duration
+        print(json.dumps(d, indent=2))
+        return
+    console.print(f"[bold]Runtime {result.action}[/bold]\n")
+    console.print(f"Runtime: {result.runtime}")
+    console.print(f"Status:  {result.status}")
+    console.print(f"Message: {result.message}")
+    console.print(f"\nDuration: {duration:.2f}s")
+
+
+@runtime_app.command("status")
+def runtime_status(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print status as JSON."),
+    ] = False,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """Show the status of the configured runtime."""
+    try:
+        timer = CommandTimer()
+        settings = load_settings()
+        manager = build_runtime_manager(settings, workspace_root=path.resolve())
+        status = manager.status()
+        _render_runtime_status(status, timer.duration_seconds, json_output)
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
+@runtime_app.command("start")
+def runtime_start(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print result as JSON."),
+    ] = False,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """Start the configured runtime (if supported)."""
+    try:
+        timer = CommandTimer()
+        settings = load_settings()
+        manager = build_runtime_manager(settings, workspace_root=path.resolve())
+        result = manager.start()
+        _render_runtime_action(result, timer.duration_seconds, json_output)
+        if result.status == "failed":
+            raise typer.Exit(code=1)
+    except ForgeError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1)
+
+
+@runtime_app.command("stop")
+def runtime_stop(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print result as JSON."),
+    ] = False,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """Stop the configured runtime (if started by Trevvos Forge)."""
+    try:
+        timer = CommandTimer()
+        settings = load_settings()
+        manager = build_runtime_manager(settings, workspace_root=path.resolve())
+        result = manager.stop()
+        _render_runtime_action(result, timer.duration_seconds, json_output)
+        if result.status == "failed":
+            raise typer.Exit(code=1)
     except ForgeError as exc:
         print_error(str(exc))
         raise typer.Exit(code=1)

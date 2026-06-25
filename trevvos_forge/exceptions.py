@@ -26,6 +26,14 @@ class ProviderConfigurationError(ProviderError):
     """Raised when provider configuration is invalid or unsupported."""
 
 
+class ForgeRuntimeError(ForgeError):
+    """Base exception for runtime-related errors."""
+
+
+class RuntimeConfigurationError(ForgeRuntimeError):
+    """Raised when runtime configuration is invalid or unsupported."""
+
+
 class ConfigurationError(ForgeError):
     """Raised when Trevvos Forge configuration is invalid."""
 

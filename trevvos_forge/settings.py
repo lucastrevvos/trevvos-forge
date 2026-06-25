@@ -10,6 +10,7 @@ class ForgeSettings:
     timeout: int
     provider: str = "ollama"
     api_key: str | None = None
+    runtime: str | None = None
 
     @classmethod
     def from_env(cls) -> "ForgeSettings":
@@ -18,6 +19,7 @@ class ForgeSettings:
         timeout_raw = os.getenv("TREVVOS_FORGE_TIMEOUT", "320")
         provider = os.getenv("TREVVOS_FORGE_PROVIDER", "ollama")
         api_key = os.getenv("TREVVOS_FORGE_API_KEY") or None
+        runtime = os.getenv("TREVVOS_FORGE_RUNTIME") or None
 
         try:
             timeout = int(timeout_raw)
@@ -37,4 +39,5 @@ class ForgeSettings:
             timeout=timeout,
             provider=provider,
             api_key=api_key,
+            runtime=runtime,
         )

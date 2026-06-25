@@ -96,6 +96,40 @@ class TestBuildScriptsOnedir(unittest.TestCase):
         self.assertIn("--onedir", text)
         self.assertNotIn("--onefile", text)
 
+# ---------------------------------------------------------------------------
+# 4b. Build scripts explicitly collect the Forge package
+# ---------------------------------------------------------------------------
+
+class TestBuildScriptsCollectForgePackage(unittest.TestCase):
+    def test_windows_script_sets_pyinstaller_paths(self) -> None:
+        text = _read("packaging/build_windows.ps1")
+        self.assertIn("--paths", text)
+        self.assertIn('"."', text)
+
+    def test_linux_script_sets_pyinstaller_paths(self) -> None:
+        text = _read("packaging/build_linux.sh")
+        self.assertIn("--paths", text)
+        self.assertIn('"$PWD"', text)
+
+    def test_windows_script_hidden_imports_forge_cli(self) -> None:
+        text = _read("packaging/build_windows.ps1")
+        self.assertIn("--hidden-import=trevvos_forge", text)
+        self.assertIn("--hidden-import=trevvos_forge.cli", text)
+
+    def test_linux_script_hidden_imports_forge_cli(self) -> None:
+        text = _read("packaging/build_linux.sh")
+        self.assertIn("--hidden-import=trevvos_forge", text)
+        self.assertIn("--hidden-import=trevvos_forge.cli", text)
+
+    def test_windows_script_collects_forge_submodules_and_data(self) -> None:
+        text = _read("packaging/build_windows.ps1")
+        self.assertIn("--collect-submodules=trevvos_forge", text)
+        self.assertIn("--collect-data=trevvos_forge", text)
+
+    def test_linux_script_collects_forge_submodules_and_data(self) -> None:
+        text = _read("packaging/build_linux.sh")
+        self.assertIn("--collect-submodules=trevvos_forge", text)
+        self.assertIn("--collect-data=trevvos_forge", text)
 
 # ---------------------------------------------------------------------------
 # 5. Build scripts do not include .trevvos

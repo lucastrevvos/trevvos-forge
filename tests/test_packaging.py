@@ -245,18 +245,32 @@ class TestVersionCliCommand(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestEntryPoint(unittest.TestCase):
-    def test_entry_point_imports_main(self) -> None:
+    def test_entry_point_imports_cli_main_lazily(self) -> None:
         text = _read("packaging/trevvos_entry.py")
-        self.assertIn("from trevvos_forge.cli import main", text)
+        self.assertIn("from trevvos_forge.cli import main as cli_main", text)
 
-    def test_entry_point_calls_main(self) -> None:
+    def test_entry_point_calls_cli_main(self) -> None:
         text = _read("packaging/trevvos_entry.py")
-        self.assertIn("main()", text)
+        self.assertIn("cli_main()", text)
 
     def test_entry_point_has_freeze_support(self) -> None:
         text = _read("packaging/trevvos_entry.py")
         self.assertIn("freeze_support", text)
 
+    def test_entry_point_adjusts_bundle_import_path(self) -> None:
+        text = _read("packaging/trevvos_entry.py")
+        self.assertIn("_ensure_bundle_import_path", text)
+        self.assertIn("_MEIPASS", text)
+        self.assertIn("sys.path.insert", text)
+
+class TestBuildScriptsIncludeForgePackage(unittest.TestCase):
+    def test_windows_script_adds_forge_package_as_data(self) -> None:
+        text = _read("packaging/build_windows.ps1")
+        self.assertIn('"trevvos_forge;trevvos_forge"', text)
+
+    def test_linux_script_adds_forge_package_as_data(self) -> None:
+        text = _read("packaging/build_linux.sh")
+        self.assertIn('"trevvos_forge:trevvos_forge"', text)
 
 def _read(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")

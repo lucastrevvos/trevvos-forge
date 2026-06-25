@@ -52,6 +52,7 @@ python -m PyInstaller `
     --collect-all typer `
     --collect-all rich `
     --copy-metadata trevvos-forge `
+    --add-data "trevvos_forge;trevvos_forge" `
     --add-data "trevvos_forge\local_api\static;trevvos_forge\local_api\static" `
     --add-data "README.md;." `
     --add-data "ALPHA.md;." `

@@ -34,22 +34,24 @@ mkdir -p release
 
 # ── 3. Build with PyInstaller ────────────────────────────────────────────────
 echo "--- Running PyInstaller..."
-pyinstaller \
-    --name "${APP_NAME}" \
-    --onedir \
-    --clean \
-    --noconfirm \
-    --paths "$PWD" \
-    --hidden-import trevvos_forge.cli \
-    --collect-submodules trevvos_forge \
-    --collect-all typer \
-    --collect-all rich \
-    --copy-metadata trevvos-forge \
-    --add-data "trevvos_forge/local_api/static:trevvos_forge/local_api/static" \
-    --add-data "README.md:." \
-    --add-data "ALPHA.md:." \
-    --add-data "docs:docs" \
-    packaging/trevvos_entry.py
+python -m PyInstaller \
+  --name "$APP_NAME" \
+  --onedir \
+  --clean \
+  --noconfirm \
+  --paths "$PWD" \
+  --hidden-import=trevvos_forge \
+  --hidden-import=trevvos_forge.cli \
+  --collect-submodules=trevvos_forge \
+  --collect-data=trevvos_forge \
+  --collect-all typer \
+  --collect-all rich \
+  --copy-metadata trevvos-forge \
+  --add-data "trevvos_forge/local_api/static:trevvos_forge/local_api/static" \
+  --add-data "README.md:." \
+  --add-data "ALPHA.md:." \
+  --add-data "docs:docs" \
+  packaging/trevvos_entry.py
 
 # ── 4. Smoke-test the binary ─────────────────────────────────────────────────
 echo ""

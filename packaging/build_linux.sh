@@ -66,16 +66,20 @@ echo "  ${BIN} version"
 "${BIN}" version
 
 echo "  ${BIN} --help"
-"${BIN}" --help | head -5
+"${BIN}" --help > /tmp/trevvos-help.txt
+head -5 /tmp/trevvos-help.txt
 
 echo "  ${BIN} setup --help"
-"${BIN}" setup --help | head -3
+"${BIN}" setup --help > /tmp/trevvos-setup-help.txt
+head -3 /tmp/trevvos-setup-help.txt
 
 echo "  ${BIN} doctor --help"
-"${BIN}" doctor --help | head -3
+"${BIN}" doctor --help > /tmp/trevvos-doctor-help.txt
+head -3 /tmp/trevvos-doctor-help.txt
 
 echo "  ${BIN} api start --help"
-"${BIN}" api start --help | head -3
+"${BIN}" api start --help > /tmp/trevvos-api-help.txt
+head -3 /tmp/trevvos-api-help.txt
 
 # ── 5. Package as tar.gz ─────────────────────────────────────────────────────
 echo ""

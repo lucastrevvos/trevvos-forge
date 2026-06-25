@@ -118,15 +118,41 @@ python packaging/build_release.py
 
 ---
 
-## Release Logistics
+## GitHub Release Publication
+
+```bash
+# Using GitHub CLI (preferred)
+gh release create v0.1.0-alpha.1 \
+  release/trevvos-forge-v0.1.0-alpha.1-windows-x64.zip \
+  release/trevvos-forge-v0.1.0-alpha.1-linux-x64.tar.gz \
+  release/SHA256SUMS.txt \
+  --title "Trevvos Forge v0.1.0-alpha.1" \
+  --notes-file RELEASE_NOTES.md \
+  --prerelease
+
+# To add assets to an existing release
+gh release upload v0.1.0-alpha.1 release/* --clobber
+```
 
 - [ ] Git tag created: `v0.1.0-alpha.1`
-- [ ] GitHub Release created (Pre-release)
-- [ ] Release assets uploaded: Windows ZIP, Linux tar.gz, SHA256SUMS.txt
+- [ ] GitHub Release created as Pre-release
+- [ ] Release title: `Trevvos Forge v0.1.0-alpha.1`
+- [ ] Release notes from `RELEASE_NOTES.md` included
+- [ ] Windows ZIP asset uploaded: `trevvos-forge-v0.1.0-alpha.1-windows-x64.zip`
+- [ ] Linux tar.gz asset uploaded: `trevvos-forge-v0.1.0-alpha.1-linux-x64.tar.gz`
+- [ ] `SHA256SUMS.txt` uploaded
+- [ ] GitHub Release URL confirmed working
+- [ ] Download and extract tested from the release URL (not from local build)
+
+---
+
+## Release Logistics
+
 - [ ] Testers selected (2–5 developers)
 - [ ] Testers briefed on scope (advisory + controlled testing; no execution mode)
-- [ ] Testers given the GitHub Release URL
+- [ ] Testers given the GitHub Release URL and `docs/alpha-download-install.md`
 - [ ] Feedback channel ready (issue tracker, Slack, email, or similar)
+- [ ] Alpha Feedback issue template enabled on the repo
 - [ ] Point of contact for tester questions identified
 - [ ] Estimated Alpha duration communicated to testers
 
@@ -142,11 +168,29 @@ Before sending to testers, prepare a short "known issues" note covering:
 
 ---
 
+## Closed Alpha Launch
+
+- [ ] Select 2–5 testers (at least 1 Windows, 1 Linux, 1 Ollama, 1 openai-compatible)
+- [ ] Customize `docs/alpha-tester-invite.md` with release URL, dates, and feedback channel
+- [ ] Send invite to testers
+- [ ] Confirm testers have the GitHub Release URL
+- [ ] Confirm testers know to start with a non-sensitive project
+- [ ] Confirm feedback channel is monitored
+- [ ] Label GitHub Issues with `alpha` for the test window
+- [ ] Create GitHub labels: critical, high, medium, low, alpha, alpha.2, needs-export
+- [ ] Open `docs/alpha-known-issues.md` for tracking during the run
+- [ ] Prepare `docs/alpha-results-template.md` to fill in after the window
+
+---
+
 ## Post-Alpha
 
 After Alpha:
 
-- [ ] Collect all feedback reports
-- [ ] Triage into: bugs, UX issues, feature requests, documentation gaps
+- [ ] Fill in `docs/alpha-results-template.md`
+- [ ] Evaluate against `docs/alpha-success-criteria.md`
+- [ ] Triage all issues with `docs/alpha-feedback-triage.md`
+- [ ] Update `docs/alpha-known-issues.md` with confirmed bugs
 - [ ] Update `docs/known-limitations.md` with newly discovered limitations
-- [ ] Tag a new release or plan a Beta if Alpha goals are met
+- [ ] Scope `v0.1.0-alpha.2` based on critical and high-priority findings
+- [ ] Tag `v0.1.0-alpha.2` when ready or plan Beta if Alpha goals met

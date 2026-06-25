@@ -27,15 +27,31 @@ Forge also includes a local dashboard (`trevvos api start --open`) and session e
 
 ---
 
+## Download Alpha
+
+The current Alpha release is available as standalone binaries — no Python, Git, or pip required.
+
+| Platform | Download |
+|---|---|
+| Windows x64 | `trevvos-forge-v0.1.0-alpha.1-windows-x64.zip` |
+| Linux x64 | `trevvos-forge-v0.1.0-alpha.1-linux-x64.tar.gz` |
+
+See [docs/alpha-download-install.md](docs/alpha-download-install.md) for installation instructions.
+
+---
+
 ## Closed Alpha
 
-Forge is preparing for a closed technical Alpha with external developers.
+Forge is currently in a closed technical Alpha.
 
 See:
 
 - [ALPHA.md](ALPHA.md) — Alpha overview and safety notes
-- [docs/alpha-quickstart.md](docs/alpha-quickstart.md) — Installation and setup guides
+- [docs/alpha-download-install.md](docs/alpha-download-install.md) — Download and install guide
+- [docs/alpha-tester-invite.md](docs/alpha-tester-invite.md) — Tester invite (English and Portuguese)
+- [docs/alpha-quickstart.md](docs/alpha-quickstart.md) — First steps and provider setup
 - [docs/alpha-test-plan.md](docs/alpha-test-plan.md) — Guided test plan for Alpha testers
+- [docs/alpha-success-criteria.md](docs/alpha-success-criteria.md) — Success and pause criteria for the Alpha run
 - [docs/feedback-template.md](docs/feedback-template.md) — Bug report template
 - [docs/known-limitations.md](docs/known-limitations.md) — Known limitations and experimental commands
 

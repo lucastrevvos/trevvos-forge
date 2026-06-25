@@ -1,11 +1,31 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
 .venv/
+.venv-build/
 venv/
-.env
-.DS_Store
-.idea/
-.vscode/
+env/
+
+# Trevvos local data
 .trevvos/
-*.egg-info/
+
+# PyInstaller/build artifacts
+build/
+dist/
+release/
+*.spec
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
 .important
+
+.env
+trevvos_forge.egg-info/

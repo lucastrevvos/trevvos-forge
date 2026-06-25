@@ -27,9 +27,15 @@ Do not test these unless specifically guided:
 
 ---
 
-## Installation
+## Download
 
-Download the standalone binary for your OS from the GitHub Release — no Python, Git, or pip required.
+Download the standalone binary from the [GitHub Release](https://github.com/your-org/trevvos-forge/releases/tag/v0.1.0-alpha.1) — no Python, Git, or pip required.
+
+See [docs/alpha-download-install.md](docs/alpha-download-install.md) for the full install guide.
+
+---
+
+## Installation
 
 **Windows x64:**
 
@@ -137,9 +143,23 @@ Key limitations to be aware of:
 
 ---
 
+## Closed Alpha Test Run
+
+The current Alpha test run is guided by:
+
+- [docs/alpha-runbook.md](docs/alpha-runbook.md) — Operational runbook for the maintainer
+- [docs/alpha-tester-invite.md](docs/alpha-tester-invite.md) — Invite template (English + Portuguese)
+- [docs/alpha-feedback-triage.md](docs/alpha-feedback-triage.md) — Issue triage guide and severity labels
+- [docs/alpha-success-criteria.md](docs/alpha-success-criteria.md) — Objective success and pause criteria
+- [docs/alpha-known-issues.md](docs/alpha-known-issues.md) — Living list of known issues during the Alpha
+- [docs/alpha-results-template.md](docs/alpha-results-template.md) — Post-alpha results report template
+
+---
+
 ## Docs
 
 - [Alpha Quickstart](docs/alpha-quickstart.md)
+- [Alpha Download and Install](docs/alpha-download-install.md)
 - [Alpha Test Plan](docs/alpha-test-plan.md)
 - [Provider Configuration](docs/providers.md)
 - [Advisory Mode](docs/advisory-mode.md)

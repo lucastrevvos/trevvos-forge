@@ -176,6 +176,119 @@ class DocumentationTests(unittest.TestCase):
         self.assertIn("127.0.0.1", text)
 
 
+    # -----------------------------------------------------------------------
+    # Marco 84: GitHub Release v0.1.0-alpha.1 docs
+    # -----------------------------------------------------------------------
+
+    def test_release_notes_exist(self) -> None:
+        self.assertTrue((ROOT / "RELEASE_NOTES.md").exists())
+
+    def test_release_notes_content(self) -> None:
+        text = _read("RELEASE_NOTES.md").lower()
+
+        self.assertIn("v0.1.0-alpha.1", text)
+        self.assertIn("windows-x64.zip", text)
+        self.assertIn("linux-x64.tar.gz", text)
+        self.assertIn("sha256sums", text)
+        self.assertIn("trevvos setup", text)
+        self.assertIn("trevvos sessions export", text)
+
+    def test_release_specific_doc_exists(self) -> None:
+        self.assertTrue((ROOT / "docs" / "release-v0.1.0-alpha.1.md").exists())
+
+    def test_alpha_download_install_doc_exists(self) -> None:
+        self.assertTrue((ROOT / "docs" / "alpha-download-install.md").exists())
+
+    def test_readme_links_to_download_install(self) -> None:
+        readme = _read("README.md")
+        self.assertIn("docs/alpha-download-install.md", readme)
+
+    def test_alpha_md_links_to_download_install(self) -> None:
+        text = _read("ALPHA.md")
+        self.assertIn("docs/alpha-download-install.md", text)
+
+    def test_release_checklist_mentions_github_release_assets(self) -> None:
+        text = _read("docs/release-checklist.md").lower()
+        self.assertIn("windows zip", text)
+        self.assertIn("linux", text)
+        self.assertIn("sha256sums", text)
+        self.assertIn("pre-release", text)
+
+    def test_issue_template_exists(self) -> None:
+        self.assertTrue(
+            (ROOT / ".github" / "ISSUE_TEMPLATE" / "alpha-feedback.md").exists()
+        )
+
+    def test_download_install_guide_covers_windows_and_linux(self) -> None:
+        text = _read("docs/alpha-download-install.md").lower()
+        self.assertIn("windows", text)
+        self.assertIn("linux", text)
+        self.assertIn("trevvos setup", text)
+        self.assertIn("trevvos sessions export", text)
+
+
+    # -----------------------------------------------------------------------
+    # Marco 85: Closed Alpha Test Run docs
+    # -----------------------------------------------------------------------
+
+    def test_alpha_run_docs_exist(self) -> None:
+        self.assertTrue((ROOT / "docs" / "alpha-tester-invite.md").exists())
+        self.assertTrue((ROOT / "docs" / "alpha-runbook.md").exists())
+        self.assertTrue((ROOT / "docs" / "alpha-feedback-triage.md").exists())
+        self.assertTrue((ROOT / "docs" / "alpha-success-criteria.md").exists())
+        self.assertTrue((ROOT / "docs" / "alpha-known-issues.md").exists())
+        self.assertTrue((ROOT / "docs" / "alpha-results-template.md").exists())
+
+    def test_alpha_md_links_to_runbook(self) -> None:
+        text = _read("ALPHA.md")
+        self.assertIn("docs/alpha-runbook.md", text)
+
+    def test_readme_links_to_tester_invite(self) -> None:
+        text = _read("README.md")
+        self.assertIn("docs/alpha-tester-invite.md", text)
+
+    def test_readme_links_to_success_criteria(self) -> None:
+        text = _read("README.md")
+        self.assertIn("docs/alpha-success-criteria.md", text)
+
+    def test_alpha_invite_covers_key_commands(self) -> None:
+        text = _read("docs/alpha-tester-invite.md").lower()
+        self.assertIn("trevvos setup", text)
+        self.assertIn("trevvos doctor", text)
+        self.assertIn("trevvos sessions export", text)
+        self.assertIn("execution mode", text)
+
+    def test_alpha_success_criteria_has_safety_requirement(self) -> None:
+        text = _read("docs/alpha-success-criteria.md").lower()
+        self.assertIn("no critical safety issue", text)
+        self.assertIn("advisory mode", text)
+        self.assertIn("pause", text)
+
+    def test_alpha_triage_has_severity_labels(self) -> None:
+        text = _read("docs/alpha-feedback-triage.md").lower()
+        self.assertIn("critical", text)
+        self.assertIn("high", text)
+        self.assertIn("medium", text)
+        self.assertIn("low", text)
+        self.assertIn("severity", text)
+
+    def test_alpha_known_issues_mentions_execution_mode(self) -> None:
+        text = _read("docs/alpha-known-issues.md").lower()
+        self.assertIn("execution mode", text)
+        self.assertIn("experimental", text)
+
+    def test_issue_template_has_severity_and_artifact(self) -> None:
+        text = _read(".github/ISSUE_TEMPLATE/alpha-feedback.md").lower()
+        self.assertIn("severity", text)
+        self.assertIn("artifact used", text)
+        self.assertIn("trevvos sessions export", text)
+
+    def test_release_checklist_has_alpha_launch_section(self) -> None:
+        text = _read("docs/release-checklist.md").lower()
+        self.assertIn("closed alpha launch", text)
+        self.assertIn("alpha-tester-invite", text)
+
+
 def _read(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
 

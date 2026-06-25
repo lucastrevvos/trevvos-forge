@@ -13,33 +13,56 @@
 
 $ErrorActionPreference = "Stop"
 
-$Version  = "0.1.0-alpha.1"
-$AppName  = "trevvos"
-$ZipName  = "trevvos-forge-v$Version-windows-x64.zip"
-$ZipPath  = "release\$ZipName"
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $FilePath,
+
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]] $Arguments
+    )
+
+    & $FilePath @Arguments
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed with exit code $LASTEXITCODE: $FilePath $($Arguments -join ' ')"
+    }
+}
+
+$Version = "0.1.0-alpha.1"
+$AppName = "trevvos"
+$ZipName = "trevvos-forge-v$Version-windows-x64.zip"
+$ZipPath = "release\$ZipName"
 
 Write-Host ""
-Write-Host "=== Trevvos Forge Binary Build â€” Windows x64 ==="
+Write-Host "=== Trevvos Forge Binary Build - Windows x64 ==="
 Write-Host "Version : $Version"
 Write-Host "Output  : $ZipPath"
 Write-Host ""
 
-# â”€â”€ 1. Install / refresh build deps â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-Write-Host "--- Installing build dependencies..."
-python -m pip install -U pip --quiet
-python -m pip install -e . --quiet
-python -m pip install pyinstaller --quiet
+Write-Host "--- Python environment..."
+Invoke-Native python --version
+python -c "import sys; print(sys.executable)"
 
-# â”€â”€ 2. Clean previous outputs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-Write-Host "--- Cleaning previous build artefacts..."
+# 1. Install / refresh build deps
+Write-Host "--- Installing build dependencies..."
+Invoke-Native python -m pip install -U pip
+Invoke-Native python -m pip install -e .
+Invoke-Native python -m pip install PyInstaller
+Invoke-Native python -m PyInstaller --version
+
+# 2. Clean previous outputs
+Write-Host "--- Cleaning previous build artifacts..."
 foreach ($dir in @("build", "dist", "release")) {
-    if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+    if (Test-Path $dir) {
+        Remove-Item $dir -Recurse -Force
+    }
 }
 New-Item -ItemType Directory -Force release | Out-Null
 
-# â”€â”€ 3. Build with PyInstaller â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# 3. Build with PyInstaller
 Write-Host "--- Running PyInstaller..."
-python -m PyInstaller `
+Invoke-Native python -m PyInstaller `
     --name $AppName `
     --onedir `
     --clean `
@@ -59,16 +82,20 @@ python -m PyInstaller `
     --add-data "docs;docs" `
     packaging\trevvos_entry.py
 
-# â”€â”€ 4. Smoke-test the binary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# 4. Smoke-test the binary
 Write-Host ""
 Write-Host "--- Validating binary..."
-$Bin = "dist\$AppName\$AppName.exe"
+$Bin = Join-Path (Get-Location) "dist\$AppName\$AppName.exe"
+
+if (!(Test-Path $Bin)) {
+    throw "Binary not found: $Bin"
+}
 
 Write-Host "  $Bin --version"
-& $Bin --version
+Invoke-Native $Bin --version
 
 Write-Host "  $Bin version"
-& $Bin version
+Invoke-Native $Bin version
 
 Write-Host "  $Bin --help"
 & $Bin --help | Select-Object -First 5
@@ -82,7 +109,7 @@ Write-Host "  $Bin doctor --help"
 Write-Host "  $Bin api start --help"
 & $Bin api start --help | Select-Object -First 3
 
-# â”€â”€ 5. Package as ZIP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# 5. Package as ZIP
 Write-Host ""
 Write-Host "--- Creating ZIP..."
 
@@ -107,7 +134,9 @@ if (Test-Path $ZipPath) {
 }
 
 Compress-Archive -Path "$PackageAppDir\*" -DestinationPath $ZipPath -Force
+
 $SizeMB = [math]::Round((Get-Item $ZipPath).Length / 1MB, 1)
+
 Write-Host ""
 Write-Host "=== Done ==="
 Write-Host "Release : $ZipPath ($SizeMB MB)"
@@ -118,4 +147,3 @@ Write-Host "  cd trevvos"
 Write-Host "  .\$AppName.exe setup"
 Write-Host "  .\$AppName.exe doctor"
 Write-Host "  .\$AppName.exe api start --open"
-

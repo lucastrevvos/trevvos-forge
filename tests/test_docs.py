@@ -1,6 +1,6 @@
 import unittest
 from pathlib import Path
-
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,9 +59,9 @@ class DocumentationTests(unittest.TestCase):
     def test_readme_commands_table_has_modifies_code_column(self) -> None:
         readme = _read("README.md")
 
-        self.assertIn("| Command | Mode | Modifies code? | Purpose |", readme)
-        self.assertIn("| `trevvos apply` | Execution | Yes |", readme)
-        self.assertIn("| `trevvos review-diff` | Advisory | No |", readme)
+        self.assertRegex(readme, r"\|\s*Command\s*\|\s*Mode\s*\|\s*Modifies code\?\s*\|\s*Purpose\s*\|",)
+        self.assertRegex(readme, r"\|\s*`trevvos apply`\s*\|\s*Execution\s*\|\s*Yes\s*\|",)
+        self.assertRegex(readme, r"\|\s*`trevvos review-diff`\s*\|\s*Advisory\s*\|\s*No\s*\|",)
 
     def test_readme_and_docs_show_cd_example_for_project_root(self) -> None:
         readme = _read("README.md").lower()

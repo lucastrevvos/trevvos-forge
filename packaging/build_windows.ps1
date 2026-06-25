@@ -44,6 +44,9 @@ python -m PyInstaller `
     --onedir `
     --clean `
     --noconfirm `
+    --paths "." `
+    --hidden-import trevvos_forge.cli `
+    --collect-submodules trevvos_forge `
     --collect-all typer `
     --collect-all rich `
     --copy-metadata trevvos-forge `

@@ -39,6 +39,9 @@ pyinstaller \
     --onedir \
     --clean \
     --noconfirm \
+    --paths "$PWD" \
+    --hidden-import trevvos_forge.cli \
+    --collect-submodules trevvos_forge \
     --collect-all typer \
     --collect-all rich \
     --copy-metadata trevvos-forge \

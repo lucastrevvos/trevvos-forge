@@ -1612,6 +1612,147 @@ def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+class Marco70ExecutionTimingTests(unittest.TestCase):
+    """Tests for Marco 70: execution timing in metadata, summary, and CLI output."""
+
+    def _make_request(self, root: Path) -> "TestAddRequest":
+        return TestAddRequest(
+            repo_root=root,
+            source_path="calculator.py",
+            symbol="divide",
+            all_symbols=False,
+            test_file=None,
+            unit=False,
+            e2e=False,
+            write=False,
+            yes=False,
+            force=False,
+            keep_sandbox=False,
+            max_generation_retries=1,
+            max_structure_retries=1,
+            max_sandbox_retries=1,
+            timeout=120,
+        )
+
+    def test_metadata_includes_duration_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            provider = _FakeProvider(_create_test_file_response())
+            result = run_tests_add_workflow(self._make_request(root), provider)
+
+            self.assertIn("duration_seconds", result.metadata)
+            self.assertIsNotNone(result.metadata["duration_seconds"])
+            self.assertGreaterEqual(result.metadata["duration_seconds"], 0)
+
+    def test_metadata_includes_execution_stages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            provider = _FakeProvider(_create_test_file_response())
+            result = run_tests_add_workflow(self._make_request(root), provider)
+
+            self.assertIn("execution", result.metadata)
+            execution = result.metadata["execution"]
+            self.assertIn("duration_seconds", execution)
+            self.assertIn("stages", execution)
+            stages = execution["stages"]
+            self.assertIsInstance(stages, list)
+            self.assertGreater(len(stages), 0)
+
+    def test_metadata_has_generate_tests_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            provider = _FakeProvider(_create_test_file_response())
+            result = run_tests_add_workflow(self._make_request(root), provider)
+
+            stages = result.metadata["execution"]["stages"]
+            stage_names = [s["name"] for s in stages]
+            self.assertIn("generate_tests", stage_names)
+
+    def test_metadata_has_sandbox_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            provider = _FakeProvider(_create_test_file_response())
+            result = run_tests_add_workflow(self._make_request(root), provider)
+
+            stages = result.metadata["execution"]["stages"]
+            stage_names = [s["name"] for s in stages]
+            self.assertIn("sandbox", stage_names)
+
+    def test_metadata_written_to_disk_has_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            provider = _FakeProvider(_create_test_file_response())
+            result = run_tests_add_workflow(self._make_request(root), provider)
+
+            metadata_path = result.session_path / "test_generation_metadata.json"
+            self.assertTrue(metadata_path.exists())
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            self.assertIn("duration_seconds", metadata)
+            self.assertIn("execution", metadata)
+
+    def test_summary_includes_execution_timing_section(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            provider = _FakeProvider(_create_test_file_response())
+            result = run_tests_add_workflow(self._make_request(root), provider)
+
+            summary_path = result.session_path / "test_generation_summary.md"
+            self.assertTrue(summary_path.exists())
+            summary_text = summary_path.read_text(encoding="utf-8")
+            self.assertIn("Execution timing", summary_text)
+
+    def test_summary_includes_total_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            provider = _FakeProvider(_create_test_file_response())
+            result = run_tests_add_workflow(self._make_request(root), provider)
+
+            summary_path = result.session_path / "test_generation_summary.md"
+            summary_text = summary_path.read_text(encoding="utf-8")
+            self.assertIn("Total duration:", summary_text)
+
+    def test_skipped_path_includes_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            tests_dir = root / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_calculator.py").write_text(
+                "import unittest\nfrom calculator import divide\n\n"
+                "class TestCalc(unittest.TestCase):\n"
+                "    def test_divide(self):\n"
+                "        divide(1, 1)\n",
+                encoding="utf-8",
+            )
+            provider = _FakeProvider(_create_test_file_response())
+            result = run_tests_add_workflow(self._make_request(root), provider)
+
+            self.assertEqual(result.status, "skipped_existing_tests")
+            self.assertIn("duration_seconds", result.metadata)
+
+    def test_cli_output_includes_duration(self) -> None:
+        from trevvos_forge.test_generation_workflow import render_test_add_result
+        from unittest.mock import MagicMock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            provider = _FakeProvider(_create_test_file_response())
+            result = run_tests_add_workflow(self._make_request(root), provider)
+
+            console = MagicMock()
+            render_test_add_result(result=result, json_output=False, console=console)
+            printed = " ".join(str(call) for call in console.print.call_args_list)
+            self.assertIn("Duration:", printed)
+
+    def test_failure_path_includes_duration_in_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _sample_repo(Path(tmp))
+            provider = _FakeProvider('{"changes": []}')  # Invalid — empty changes list
+            result = run_tests_add_workflow(self._make_request(root), provider)
+
+            self.assertNotEqual(result.status, "test_diff_validated")
+            self.assertIn("duration_seconds", result.metadata)
+
+
 class _FakeProvider:
     def __init__(self, response: str | list[str]) -> None:
         self.responses = [response] if isinstance(response, str) else list(response)

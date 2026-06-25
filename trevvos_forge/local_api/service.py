@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-_SENSITIVE_KEYS = frozenset({"api_key", "token", "secret", "password", "authorization", "auth"})
+from trevvos_forge.redaction import mask_secrets as _mask_secrets
 
 _METADATA_FILES = [
     "analysis_metadata.json",
@@ -57,17 +57,6 @@ class ArtifactAccessError(LocalApiError):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _mask_secrets(data: Any) -> Any:
-    if isinstance(data, dict):
-        return {
-            k: "present" if k.lower() in _SENSITIVE_KEYS else _mask_secrets(v)
-            for k, v in data.items()
-        }
-    if isinstance(data, list):
-        return [_mask_secrets(item) for item in data]
-    return data
-
 
 def _artifact_kind(name: str) -> str:
     return _ARTIFACT_KINDS.get(Path(name).suffix.lower(), "unknown")

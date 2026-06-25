@@ -451,6 +451,7 @@ def build_test_generation_summary(
     import_repair: dict | None = None,
     structure_retries: dict | None = None,
     operation_retries: dict | None = None,
+    execution: dict | None = None,
 ) -> str:
     changed = "\n".join(f"- {path}" for path in files_changed) or "- none"
     symbol = target.symbol.name if target.symbol is not None else "all"
@@ -463,6 +464,7 @@ def build_test_generation_summary(
     import_repair_summary = _import_repair_summary_section(import_repair)
     structure_retry_summary = _structure_retry_summary_section(structure_retries)
     operation_retry_summary = _operation_retry_summary_section(operation_retries)
+    timing_section = _execution_timing_section(execution)
     return f"""# Test Generation Summary
 
 Mode: controlled_execution
@@ -510,6 +512,7 @@ Status: {status}
 
 {structure_retry_summary}
 
+{timing_section}
 Files changed:
 {changed}
 
@@ -541,6 +544,7 @@ def metadata_for_target(
     symbols_original: list[str] | None = None,
     provider_called: bool | None = None,
     write_allowed: bool | None = None,
+    execution: dict | None = None,
 ) -> dict:
     metadata = {
         "mode": "controlled_execution",
@@ -637,6 +641,10 @@ def metadata_for_target(
 
     if write_allowed is not None:
         metadata["write_allowed"] = write_allowed
+
+    if execution is not None:
+        metadata["duration_seconds"] = execution.get("duration_seconds")
+        metadata["execution"] = execution
 
     return metadata
 
@@ -747,6 +755,22 @@ def _existing_tests_prompt_section(existing_tests_check: ExistingTestsCheck | No
         lines.append("- Generate tests only for requested missing symbols. Do not duplicate existing tests.")
 
     return "\n".join(lines)
+
+
+def _execution_timing_section(execution: dict | None) -> str:
+    if execution is None:
+        return ""
+    total = execution.get("duration_seconds", 0)
+    stages = execution.get("stages", [])
+    if not stages:
+        return f"## Execution timing\n\nTotal duration: {total:.2f}s\n"
+    stage_lines = "\n".join(
+        f"- {s['name']}: {s['status']} in {s['duration_seconds']:.3f}s"
+        if s.get("duration_seconds") is not None
+        else f"- {s['name']}: {s['status']}"
+        for s in stages
+    )
+    return f"## Execution timing\n\nTotal duration: {total:.2f}s\n\nStages:\n{stage_lines}\n"
 
 
 def _existing_tests_summary_section(existing_tests_check: ExistingTestsCheck | None) -> str:

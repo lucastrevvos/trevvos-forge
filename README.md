@@ -27,6 +27,20 @@ Forge also includes a local dashboard (`trevvos api start --open`) and session e
 
 ---
 
+## Closed Alpha
+
+Forge is preparing for a closed technical Alpha with external developers.
+
+See:
+
+- [ALPHA.md](ALPHA.md) — Alpha overview and safety notes
+- [docs/alpha-quickstart.md](docs/alpha-quickstart.md) — Installation and setup guides
+- [docs/alpha-test-plan.md](docs/alpha-test-plan.md) — Guided test plan for Alpha testers
+- [docs/feedback-template.md](docs/feedback-template.md) — Bug report template
+- [docs/known-limitations.md](docs/known-limitations.md) — Known limitations and experimental commands
+
+---
+
 ## Quick Start
 
 ```bash

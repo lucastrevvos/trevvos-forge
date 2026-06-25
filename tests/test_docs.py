@@ -125,6 +125,56 @@ class DocumentationTests(unittest.TestCase):
         self.assertIn("trevvos doctor", text)
         self.assertIn("trevvos tests add", text)
 
+    # -----------------------------------------------------------------------
+    # Marco 82: Alpha release docs
+    # -----------------------------------------------------------------------
+
+    def test_alpha_docs_exist(self) -> None:
+        self.assertTrue((ROOT / "ALPHA.md").exists())
+        self.assertTrue((ROOT / "docs" / "alpha-test-plan.md").exists())
+        self.assertTrue((ROOT / "docs" / "feedback-template.md").exists())
+        self.assertTrue((ROOT / "docs" / "known-limitations.md").exists())
+        self.assertTrue((ROOT / "docs" / "alpha-safety.md").exists())
+        self.assertTrue((ROOT / "docs" / "release-checklist.md").exists())
+
+    def test_readme_links_to_alpha(self) -> None:
+        readme = _read("README.md")
+
+        self.assertIn("ALPHA.md", readme)
+
+    def test_alpha_md_mentions_setup_and_key_commands(self) -> None:
+        text = _read("ALPHA.md").lower()
+
+        self.assertIn("trevvos setup", text)
+        self.assertIn("trevvos doctor", text)
+        self.assertIn("trevvos sessions export", text)
+        self.assertIn("advisory", text)
+        self.assertIn("controlled testing", text)
+
+    def test_feedback_template_mentions_session_export(self) -> None:
+        text = _read("docs/feedback-template.md").lower()
+
+        self.assertIn("trevvos sessions export", text)
+        self.assertIn("environment", text)
+        self.assertIn("provider", text)
+
+    def test_known_limitations_mentions_experimental_execution(self) -> None:
+        text = _read("docs/known-limitations.md").lower()
+
+        self.assertIn("experimental", text)
+        self.assertIn("trevvos apply", text)
+        self.assertIn("trevvos plan", text)
+        self.assertIn("not recommended", text)
+
+    def test_alpha_safety_covers_advisory_and_controlled_testing(self) -> None:
+        text = _read("docs/alpha-safety.md").lower()
+
+        self.assertIn("read-only", text)
+        self.assertIn("sandbox", text)
+        self.assertIn("test files only", text)
+        self.assertIn("api_key", text)
+        self.assertIn("127.0.0.1", text)
+
 
 def _read(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")

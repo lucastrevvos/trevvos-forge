@@ -1,4 +1,4 @@
-# Safety Model
+﻿# Safety Model
 
 Trevvos Forge is local-first and artifact-driven.
 
@@ -96,3 +96,5 @@ trevvos review-diff
 ```
 
 Use Execution Mode only when you are prepared to review artifacts and validate the result.
+
+

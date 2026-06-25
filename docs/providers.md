@@ -1,4 +1,4 @@
-# Provider Configuration
+﻿# Provider Configuration
 
 Trevvos Forge supports two provider types: `ollama` and `openai-compatible`.
 
@@ -201,3 +201,5 @@ trevvos setup --provider ollama --model qwen2.5-coder:7b --yes --no-inspect
 | High quality | qwen2.5-coder:14b or :32b | gpt-4.1 |
 
 For advisory mode, smaller models are often sufficient. For Controlled Testing Mode and Execution Mode, larger models produce better patches.
+
+

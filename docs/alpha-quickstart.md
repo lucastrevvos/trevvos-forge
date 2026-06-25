@@ -1,4 +1,4 @@
-# Alpha Quickstart
+﻿# Alpha Quickstart
 
 This guide walks you through getting Trevvos Forge running against a real project, from installation to your first advisory and test generation session.
 
@@ -6,7 +6,7 @@ This guide walks you through getting Trevvos Forge running against a real projec
 
 ## Installing the Standalone Binary (Recommended for Alpha)
 
-Download the standalone binary from the GitHub Release — **no Python, Git, or pip required**.
+Download the standalone binary from the GitHub Release â€” **no Python, Git, or pip required**.
 
 **Windows x64:**
 
@@ -39,7 +39,7 @@ After extraction, continue with your provider setup below. The `trevvos` (or `tr
 If you prefer to install from source (requires Python 3.11+ and Git):
 
 ```bash
-git clone https://github.com/your-org/trevvos-forge.git
+git clone https://github.com/lucastrevvos/trevvos-forge.git
 cd trevvos-forge
 python -m venv .venv
 source .venv/bin/activate        # Linux/macOS
@@ -80,7 +80,7 @@ Smaller models (`3b`) run faster; larger models (`14b`, `32b`) produce better re
 ### 2. Install Forge
 
 ```bash
-git clone https://github.com/your-org/trevvos-forge.git
+git clone https://github.com/lucastrevvos/trevvos-forge.git
 cd trevvos-forge
 python -m venv .venv
 source .venv/bin/activate   # Linux/macOS
@@ -206,8 +206,8 @@ Recommended scenarios:
 
 Not recommended for Alpha unless specifically testing these areas:
 
-- Execution Mode (`plan`, `diff`, `apply`) — experimental.
-- Ollama runtime management (`runtime start/stop`) — only for managed Ollama setups.
+- Execution Mode (`plan`, `diff`, `apply`) â€” experimental.
+- Ollama runtime management (`runtime start/stop`) â€” only for managed Ollama setups.
 
 ---
 
@@ -225,3 +225,5 @@ Include:
 - Provider and model
 - Command used
 - Expected vs actual behavior
+
+

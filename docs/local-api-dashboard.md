@@ -1,4 +1,4 @@
-# Local API and Dashboard
+﻿# Local API and Dashboard
 
 Trevvos Forge includes a local HTTP server that exposes a read-only REST API and a browser dashboard for inspecting sessions and artifacts.
 
@@ -51,7 +51,7 @@ The dashboard has three panels:
 
 ## REST API Reference
 
-The API is read-only. All endpoints return JSON. The server binds to `127.0.0.1` (loopback) by default — it is not accessible from other machines unless you override the host.
+The API is read-only. All endpoints return JSON. The server binds to `127.0.0.1` (loopback) by default â€” it is not accessible from other machines unless you override the host.
 
 ### `GET /health`
 
@@ -141,3 +141,5 @@ curl -s http://127.0.0.1:8765/sessions/<id>/artifacts | python -m json.tool
 # Read an artifact
 curl -s http://127.0.0.1:8765/sessions/<id>/artifacts/sandbox_result.json
 ```
+
+

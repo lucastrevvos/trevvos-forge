@@ -1,4 +1,4 @@
-import unittest
+﻿import unittest
 from pathlib import Path
 import re
 
@@ -295,3 +295,4 @@ def _read(relative_path: str) -> str:
 
 if __name__ == "__main__":
     unittest.main()
+

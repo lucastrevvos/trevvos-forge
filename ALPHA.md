@@ -1,4 +1,4 @@
-# Trevvos Forge Alpha
+﻿# Trevvos Forge Alpha
 
 Trevvos Forge is in closed technical Alpha.
 
@@ -12,11 +12,11 @@ This Alpha is intended for developers who are comfortable testing CLI tools, loc
 
 These workflows are the main focus of Alpha testing:
 
-- **Advisory Mode** — `analyze`, `explain`, `propose`, `spec`, `review-diff`
-- **Controlled Testing Mode** — `tests inspect`, `tests add`, `tests apply`
-- **Local Dashboard** — `trevvos api start --open`
-- **Session Export** — `trevvos sessions export`
-- **Setup and Doctor** — `trevvos setup`, `trevvos doctor`
+- **Advisory Mode** â€” `analyze`, `explain`, `propose`, `spec`, `review-diff`
+- **Controlled Testing Mode** â€” `tests inspect`, `tests add`, `tests apply`
+- **Local Dashboard** â€” `trevvos api start --open`
+- **Session Export** â€” `trevvos sessions export`
+- **Setup and Doctor** â€” `trevvos setup`, `trevvos doctor`
 
 ### Guided Only (experimental)
 
@@ -29,7 +29,7 @@ Do not test these unless specifically guided:
 
 ## Download
 
-Download the standalone binary from the [GitHub Release](https://github.com/your-org/trevvos-forge/releases/tag/v0.1.0-alpha.1) — no Python, Git, or pip required.
+Download the standalone binary from the [GitHub Release](https://github.com/lucastrevvos/trevvos-forge/releases/tag/v0.1.0-alpha.1) â€” no Python, Git, or pip required.
 
 See [docs/alpha-download-install.md](docs/alpha-download-install.md) for the full install guide.
 
@@ -135,10 +135,10 @@ See [docs/known-limitations.md](docs/known-limitations.md) for a full list.
 
 Key limitations to be aware of:
 
-- Advisory reports are AI-generated — review before acting on them.
+- Advisory reports are AI-generated â€” review before acting on them.
 - Controlled test generation is strongest on small Python files.
 - Execution Mode is experimental and not recommended for Alpha.
-- Dashboard is basic and local — no auto-refresh.
+- Dashboard is basic and local â€” no auto-refresh.
 - No cloud sync or remote access.
 
 ---
@@ -147,12 +147,12 @@ Key limitations to be aware of:
 
 The current Alpha test run is guided by:
 
-- [docs/alpha-runbook.md](docs/alpha-runbook.md) — Operational runbook for the maintainer
-- [docs/alpha-tester-invite.md](docs/alpha-tester-invite.md) — Invite template (English + Portuguese)
-- [docs/alpha-feedback-triage.md](docs/alpha-feedback-triage.md) — Issue triage guide and severity labels
-- [docs/alpha-success-criteria.md](docs/alpha-success-criteria.md) — Objective success and pause criteria
-- [docs/alpha-known-issues.md](docs/alpha-known-issues.md) — Living list of known issues during the Alpha
-- [docs/alpha-results-template.md](docs/alpha-results-template.md) — Post-alpha results report template
+- [docs/alpha-runbook.md](docs/alpha-runbook.md) â€” Operational runbook for the maintainer
+- [docs/alpha-tester-invite.md](docs/alpha-tester-invite.md) â€” Invite template (English + Portuguese)
+- [docs/alpha-feedback-triage.md](docs/alpha-feedback-triage.md) â€” Issue triage guide and severity labels
+- [docs/alpha-success-criteria.md](docs/alpha-success-criteria.md) â€” Objective success and pause criteria
+- [docs/alpha-known-issues.md](docs/alpha-known-issues.md) â€” Living list of known issues during the Alpha
+- [docs/alpha-results-template.md](docs/alpha-results-template.md) â€” Post-alpha results report template
 
 ---
 
@@ -169,3 +169,5 @@ The current Alpha test run is guided by:
 - [Safety Model](docs/alpha-safety.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Feedback Template](docs/feedback-template.md)
+
+

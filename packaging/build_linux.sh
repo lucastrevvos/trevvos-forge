@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # Build the Trevvos Forge standalone binary for Linux x64.
 #
 # Produces dist/trevvos/ (onedir) and packages it as a tar.gz under release/.
@@ -16,23 +16,23 @@ TAR_NAME="trevvos-forge-v${VERSION}-linux-x64.tar.gz"
 TAR_PATH="release/${TAR_NAME}"
 
 echo ""
-echo "=== Trevvos Forge Binary Build — Linux x64 ==="
+echo "=== Trevvos Forge Binary Build â€” Linux x64 ==="
 echo "Version : ${VERSION}"
 echo "Output  : ${TAR_PATH}"
 echo ""
 
-# ── 1. Install / refresh build deps ────────────────────────────────────────
+# â”€â”€ 1. Install / refresh build deps â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 echo "--- Installing build dependencies..."
 python -m pip install -U pip --quiet
 python -m pip install -e . --quiet
 python -m pip install pyinstaller --quiet
 
-# ── 2. Clean previous outputs ───────────────────────────────────────────────
+# â”€â”€ 2. Clean previous outputs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 echo "--- Cleaning previous build artefacts..."
 rm -rf build dist release
 mkdir -p release
 
-# ── 3. Build with PyInstaller ────────────────────────────────────────────────
+# â”€â”€ 3. Build with PyInstaller â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 echo "--- Running PyInstaller..."
 python -m PyInstaller \
   --name "$APP_NAME" \
@@ -54,7 +54,7 @@ python -m PyInstaller \
   --add-data "docs:docs" \
   packaging/trevvos_entry.py
 
-# ── 4. Smoke-test the binary ─────────────────────────────────────────────────
+# â”€â”€ 4. Smoke-test the binary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 echo ""
 echo "--- Validating binary..."
 BIN="dist/${APP_NAME}/${APP_NAME}"
@@ -81,7 +81,7 @@ echo "  ${BIN} api start --help"
 "${BIN}" api start --help > /tmp/trevvos-api-help.txt
 head -3 /tmp/trevvos-api-help.txt
 
-# ── 5. Package as tar.gz ─────────────────────────────────────────────────────
+# â”€â”€ 5. Package as tar.gz â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 echo ""
 echo "--- Creating tar.gz..."
 tar -czf "${TAR_PATH}" -C "dist" "${APP_NAME}"
@@ -97,3 +97,4 @@ echo "  cd ${APP_NAME}"
 echo "  ./${APP_NAME} setup"
 echo "  ./${APP_NAME} doctor"
 echo "  ./${APP_NAME} api start --open"
+

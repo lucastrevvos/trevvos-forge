@@ -1,4 +1,4 @@
-# Release v0.1.0-alpha.1
+﻿# Release v0.1.0-alpha.1
 
 **Status:** Closed Alpha pre-release  
 **Release date:** 2026-06-25  
@@ -10,9 +10,9 @@
 
 | File | Platform | Size (approx.) |
 |---|---|---|
-| `trevvos-forge-v0.1.0-alpha.1-windows-x64.zip` | Windows x64 | ~60–80 MB |
-| `trevvos-forge-v0.1.0-alpha.1-linux-x64.tar.gz` | Linux x64 glibc | ~50–70 MB |
-| `SHA256SUMS.txt` | All | — |
+| `trevvos-forge-v0.1.0-alpha.1-windows-x64.zip` | Windows x64 | ~60â€“80 MB |
+| `trevvos-forge-v0.1.0-alpha.1-linux-x64.tar.gz` | Linux x64 glibc | ~50â€“70 MB |
+| `SHA256SUMS.txt` | All | â€” |
 
 Download from the GitHub Release page.
 
@@ -25,8 +25,8 @@ Download from the GitHub Release page.
 | Windows x64 | Supported | Tested on Windows 10/11 |
 | Linux x64 glibc | Supported | Tested on Ubuntu 22.04 |
 | macOS | Not yet | Planned for a future release |
-| Linux ARM64 | Not yet | — |
-| Windows ARM64 | Not yet | — |
+| Linux ARM64 | Not yet | â€” |
+| Windows ARM64 | Not yet | â€” |
 | Alpine / musl Linux | Not yet | glibc required |
 
 ---
@@ -132,7 +132,7 @@ No registry entries, system services, or PATH modifications are made by the bina
 - **First launch on Windows may be slow** due to antivirus scanning the executable.
 - **Test generation is strongest on small Python files.**
 - **No cloud sync or remote access.**
-- **API key must be in environment variable** — `trevvos setup` does not persist it.
+- **API key must be in environment variable** â€” `trevvos setup` does not persist it.
 
 See [known-limitations.md](known-limitations.md) for the full list.
 
@@ -141,7 +141,7 @@ See [known-limitations.md](known-limitations.md) for the full list.
 ## Troubleshooting
 
 **Windows: "Windows protected your PC" (SmartScreen)**  
-Click "More info" → "Run anyway". This is expected for unsigned binaries.
+Click "More info" â†’ "Run anyway". This is expected for unsigned binaries.
 
 **Windows: "DLL not found"**  
 Install the [Visual C++ Redistributable x64](https://aka.ms/vs/17/release/vc_redist.x64.exe).
@@ -155,7 +155,7 @@ chmod +x trevvos
 Ensure your provider is running: `ollama ps` or check LM Studio server status.
 
 **Dashboard assets not loading**  
-Keep the entire extracted directory together — do not move just the `trevvos` executable without its `_internal/` directory.
+Keep the entire extracted directory together â€” do not move just the `trevvos` executable without its `_internal/` directory.
 
 See [troubleshooting.md](troubleshooting.md) for more.
 
@@ -171,7 +171,7 @@ trevvos sessions export latest
 
 Fill out the feedback template: [feedback-template.md](feedback-template.md)
 
-Or open a GitHub issue using the [Alpha Feedback template](https://github.com/your-org/trevvos-forge/issues/new?template=alpha-feedback.md).
+Or open a GitHub issue using the [Alpha Feedback template](https://github.com/lucastrevvos/trevvos-forge/issues/new?template=alpha-feedback.md).
 
 ---
 
@@ -199,10 +199,12 @@ gh release upload v0.1.0-alpha.1 release/* --clobber
 
 ### Using GitHub UI
 
-1. Go to **Releases** → **Draft a new release**.
+1. Go to **Releases** â†’ **Draft a new release**.
 2. Tag: `v0.1.0-alpha.1` (create new tag).
 3. Title: `Trevvos Forge v0.1.0-alpha.1`.
 4. Description: paste contents of `RELEASE_NOTES.md`.
 5. Check **Set as a pre-release**.
 6. Upload assets: Windows ZIP, Linux tar.gz, SHA256SUMS.txt.
 7. Click **Publish release**.
+
+

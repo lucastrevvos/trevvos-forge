@@ -1,4 +1,4 @@
-# Alpha Runbook
+﻿# Alpha Runbook
 
 Operational guide for the maintainer during the Trevvos Forge closed Alpha test run.
 
@@ -26,13 +26,13 @@ Complete the release checklist (`docs/release-checklist.md`) first, then verify:
 
 ## Tester Selection
 
-**Recommended number:** 2–5 developers.
+**Recommended number:** 2â€“5 developers.
 
 **Selection criteria:**
 
 - Comfortable with terminal and CLI tools
 - Has a small-to-medium Python project available (non-sensitive for first test)
-- Willing to spend 1–3 hours on structured testing
+- Willing to spend 1â€“3 hours on structured testing
 - Can provide specific feedback with session exports
 
 **Platform diversity:**
@@ -56,7 +56,7 @@ Complete the release checklist (`docs/release-checklist.md`) first, then verify:
 
 ## Test Window
 
-**Recommended duration:** 3–7 days.
+**Recommended duration:** 3â€“7 days.
 
 **Suggested schedule:**
 
@@ -103,7 +103,7 @@ During the test window, check once per day:
 
 - Acknowledge within 24 hours
 - Ask for: OS, provider, model, command, output, session export
-- Do not promise fixes during the Alpha window — log them for alpha.2
+- Do not promise fixes during the Alpha window â€” log them for alpha.2
 - For critical bugs: investigate and patch immediately if possible
 
 ---
@@ -112,9 +112,9 @@ During the test window, check once per day:
 
 If a critical issue is found (binary fails for most testers, secrets leak, advisory mode modifies code):
 
-1. Pause the Alpha — notify testers to stop testing.
+1. Pause the Alpha â€” notify testers to stop testing.
 2. Investigate immediately.
-3. If fixable: patch and re-release as `v0.1.0-alpha.1.1` or `v0.1.0-alpha.2`.
+3. If fixable: patch and re-release as `v0.1.0-alpha.1.1` or `v0.1.0-alpha.1`.
 4. If not immediately fixable: document in `alpha-known-issues.md` and limit scope.
 
 See `docs/alpha-success-criteria.md` for pause conditions.
@@ -128,7 +128,7 @@ See `docs/alpha-success-criteria.md` for pause conditions.
 3. **Triage all issues** (see `docs/alpha-feedback-triage.md`).
 4. **Evaluate against success criteria** (see `docs/alpha-success-criteria.md`).
 5. **Decide next step:**
-   - Release `v0.1.0-alpha.2` with critical fixes
+   - Release `v0.1.0-alpha.1` with critical fixes
    - Expand to more testers
    - Continue alpha.1 if sufficient data not yet collected
    - Pause Alpha if critical unresolved bugs
@@ -145,3 +145,5 @@ If a tester reports sensitive data exposure in a session export:
 2. Ask them to describe the issue in general terms without attaching the file.
 3. Investigate the redaction logic (`trevvos_forge/redaction.py`).
 4. If real exposure confirmed: treat as critical, pause Alpha, fix immediately.
+
+

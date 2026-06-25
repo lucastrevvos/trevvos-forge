@@ -1,8 +1,8 @@
-# Trevvos Forge v0.1.0-alpha.1
+﻿# Trevvos Forge v0.1.0-alpha.1
 
 > Closed Alpha pre-release. Not for general use.
 
-This is the first binary Alpha release of Trevvos Forge — a local AI engineering CLI that helps developers understand, analyze, review, and test code using local or API-hosted LLMs.
+This is the first binary Alpha release of Trevvos Forge â€” a local AI engineering CLI that helps developers understand, analyze, review, and test code using local or API-hosted LLMs.
 
 **Release date:** 2026-06-25
 
@@ -15,7 +15,7 @@ This is the first binary Alpha release of Trevvos Forge — a local AI engineeri
 | Windows x64 | `trevvos-forge-v0.1.0-alpha.1-windows-x64.zip` | `SHA256SUMS.txt` |
 | Linux x64 | `trevvos-forge-v0.1.0-alpha.1-linux-x64.tar.gz` | `SHA256SUMS.txt` |
 
-Download from the [GitHub Release](https://github.com/your-org/trevvos-forge/releases/tag/v0.1.0-alpha.1) page.
+Download from the [GitHub Release](https://github.com/lucastrevvos/trevvos-forge/releases/tag/v0.1.0-alpha.1) page.
 
 Verify your download with the included `SHA256SUMS.txt`:
 
@@ -36,7 +36,7 @@ Get-FileHash trevvos-forge-v0.1.0-alpha.1-windows-x64.zip -Algorithm SHA256
 
 ## What Is Included
 
-- Standalone CLI (`trevvos` / `trevvos.exe`) — no Python required
+- Standalone CLI (`trevvos` / `trevvos.exe`) â€” no Python required
 - Advisory Mode: `analyze`, `explain`, `propose`, `spec`, `review-diff`
 - Controlled Testing Mode: `tests inspect`, `tests add`, `tests apply`
 - Setup and Doctor: `trevvos setup`, `trevvos doctor`
@@ -137,7 +137,7 @@ Only test files are modified. The patch is validated in a sandbox before `tests 
 |---|---|
 | Windows x64 | Supported |
 | Linux x64 glibc | Supported |
-| macOS | Not yet — planned |
+| macOS | Not yet â€” planned |
 | Linux ARM64 | Not yet |
 | Windows ARM64 | Not yet |
 | Alpine/musl Linux | Not yet |
@@ -146,7 +146,7 @@ Only test files are modified. The patch is validated in a sandbox before `tests 
 
 ## Safety Notes
 
-- Advisory Mode is read-only — no code modifications.
+- Advisory Mode is read-only â€” no code modifications.
 - Controlled Testing only modifies test files after sandbox validation.
 - `trevvos apply` (Execution Mode) is experimental and not recommended for this Alpha.
 - Local API binds to `127.0.0.1` by default.
@@ -160,7 +160,7 @@ Only test files are modified. The patch is validated in a sandbox before `tests 
 - Execution Mode (`plan`, `diff`, `apply`, `repair`, `work`) is experimental. Do not use during Alpha unless guided.
 - Generated test patches are strongest on small Python files with simple functions.
 - Non-Python test generation is limited.
-- Dashboard is basic — no auto-refresh, no filtering.
+- Dashboard is basic â€” no auto-refresh, no filtering.
 - No cloud sync or remote session access.
 - macOS build not included in this release.
 - First launch on Windows may be slow due to antivirus scanning.
@@ -177,6 +177,8 @@ After any session, export it and attach to your report:
 trevvos sessions export latest
 ```
 
-Review the export before sharing — it contains source code and LLM prompts. Secrets in JSON artifacts are masked automatically.
+Review the export before sharing â€” it contains source code and LLM prompts. Secrets in JSON artifacts are masked automatically.
 
-Use the [Alpha Feedback issue template](https://github.com/your-org/trevvos-forge/issues/new?template=alpha-feedback.md) or the template at [docs/feedback-template.md](docs/feedback-template.md).
+Use the [Alpha Feedback issue template](https://github.com/lucastrevvos/trevvos-forge/issues/new?template=alpha-feedback.md) or the template at [docs/feedback-template.md](docs/feedback-template.md).
+
+

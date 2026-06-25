@@ -1,4 +1,4 @@
-"""Tests for Marco 83 packaging infrastructure."""
+﻿"""Tests for Marco 83 packaging infrastructure."""
 from __future__ import annotations
 
 import unittest
@@ -278,3 +278,4 @@ def _read(relative_path: str) -> str:
 
 if __name__ == "__main__":
     unittest.main()
+

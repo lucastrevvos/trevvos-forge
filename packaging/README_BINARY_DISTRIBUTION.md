@@ -1,6 +1,6 @@
-# Binary Distribution
+﻿# Binary Distribution
 
-Trevvos Forge can be distributed as standalone executables for Windows and Linux — no Python, no Git, no pip required by the end user.
+Trevvos Forge can be distributed as standalone executables for Windows and Linux â€” no Python, no Git, no pip required by the end user.
 
 This document describes how to build, test, and publish the standalone binaries.
 
@@ -186,7 +186,7 @@ Artefacts are uploaded to the workflow run and can be downloaded from the GitHub
 
 - macOS build not yet implemented (planned for a future marco).
 - PyInstaller `--onedir` produces a directory, not a single file. Users must keep the entire directory together.
-- Large model files are never bundled — users configure Ollama or an OpenAI-compatible provider separately.
+- Large model files are never bundled â€” users configure Ollama or an OpenAI-compatible provider separately.
 - First launch may be slower on Windows due to antivirus scanning the extracted files.
 - If `importlib.metadata` is unavailable in the bundle, the version fallback `0.1.0-alpha.1` is used.
 
@@ -205,3 +205,4 @@ Ensure the entire extracted directory is kept together. The `trevvos_forge/local
 
 **`trevvos setup` writes `.trevvos/` to the current directory:**  
 This is expected. Run `trevvos setup` from the root of the project you want to configure.
+

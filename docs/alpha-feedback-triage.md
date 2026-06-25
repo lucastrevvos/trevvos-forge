@@ -1,4 +1,4 @@
-# Alpha Feedback Triage
+﻿# Alpha Feedback Triage
 
 Guide for triaging issues reported during the closed Alpha test run.
 
@@ -13,7 +13,7 @@ Apply these labels to Alpha issues. Create them in the repository before the tes
 | Label | Use |
 |---|---|
 | `alpha` | All issues from the Alpha test run |
-| `alpha.2` | Targeted for v0.1.0-alpha.2 |
+| `alpha.2` | Targeted for v0.1.0-alpha.1 |
 | `needs-export` | Waiting for session export from tester |
 | `needs-reproduction` | Cannot reproduce yet |
 | `confirmed` | Issue confirmed by maintainer |
@@ -103,16 +103,16 @@ For each new issue:
 
 ```
 1. Confirm OS, provider, model, Forge version
-   → Ask if not provided: "Could you share your OS, provider, and model?"
+   â†’ Ask if not provided: "Could you share your OS, provider, and model?"
 
 2. Confirm the command used
-   → Ask: "What exact command did you run?"
+   â†’ Ask: "What exact command did you run?"
 
 3. Confirm the output / error message
-   → Ask: "Could you paste the full terminal output?"
+   â†’ Ask: "Could you paste the full terminal output?"
 
 4. Request session export if not attached
-   → "Could you run `trevvos sessions export latest` and attach the output?
+   â†’ "Could you run `trevvos sessions export latest` and attach the output?
       Please review it for sensitive content before sharing."
 
 5. Try to reproduce locally with the same OS/provider/model
@@ -122,11 +122,11 @@ For each new issue:
 7. Assign area label (installer/setup/provider/etc.)
 
 8. Decide disposition:
-   - alpha.2 blocker → label alpha.2, link to known issues
-   - docs fix → fix immediately, label docs
-   - not a bug → explain and close with wontfix
-   - cannot reproduce → label needs-reproduction, ask for more info
-   - deferred → label later or not planned
+   - alpha.2 blocker â†’ label alpha.2, link to known issues
+   - docs fix â†’ fix immediately, label docs
+   - not a bug â†’ explain and close with wontfix
+   - cannot reproduce â†’ label needs-reproduction, ask for more info
+   - deferred â†’ label later or not planned
 ```
 
 ---
@@ -142,7 +142,7 @@ Thanks for the report! Could you attach a session export to help us investigate?
 trevvos sessions export latest
 ```
 
-Please review the export before attaching — it contains source code and LLM prompts.
+Please review the export before attaching â€” it contains source code and LLM prompts.
 If there is anything sensitive, describe the issue in general terms instead.
 ```
 
@@ -157,3 +157,5 @@ During the Alpha test window, triage new issues once per day:
 3. Update `docs/alpha-known-issues.md` with confirmed bugs.
 4. Flag any critical issues for immediate attention.
 5. Note triage count in `docs/alpha-results-template.md`.
+
+

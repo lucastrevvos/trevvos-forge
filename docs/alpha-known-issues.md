@@ -1,4 +1,4 @@
-# Alpha Known Issues
+﻿# Alpha Known Issues
 
 This file tracks known issues during the Trevvos Forge v0.1.0-alpha.1 closed Alpha.
 
@@ -23,7 +23,7 @@ These issues were identified before the Alpha test run began.
 | AI output | Test generation strongest on small Python files | Expected | Use smaller, self-contained source files |
 | API key | Must be set as `TREVVOS_FORGE_API_KEY` env var; not saved by setup | Low | Set env var before running `trevvos setup` and `trevvos doctor` |
 | Windows | First launch may be slow due to antivirus scanning | Low | Wait for scan to complete; add exception if needed |
-| Windows | SmartScreen warning on first launch | Low | Click "More info" → "Run anyway" |
+| Windows | SmartScreen warning on first launch | Low | Click "More info" â†’ "Run anyway" |
 
 ---
 
@@ -33,7 +33,7 @@ These issues were identified before the Alpha test run began.
 
 | ID | Date | Severity | Area | Summary | Status | GitHub Issue |
 |---|---|---|---|---|---|---|
-| — | — | — | — | No issues reported yet | — | — |
+| â€” | â€” | â€” | â€” | No issues reported yet | â€” | â€” |
 
 ---
 
@@ -43,7 +43,7 @@ These issues were identified before the Alpha test run began.
 
 | ID | Summary | Fixed In | Notes |
 |---|---|---|---|
-| — | — | — | — |
+| â€” | â€” | â€” | â€” |
 
 ---
 
@@ -57,3 +57,5 @@ When a tester reports an issue:
 4. When fixed, move the row to "Resolved During Alpha".
 
 Severity follows `docs/alpha-feedback-triage.md` definitions.
+
+

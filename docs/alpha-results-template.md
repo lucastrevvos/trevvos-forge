@@ -1,4 +1,4 @@
-# Trevvos Forge Alpha Results
+﻿# Trevvos Forge Alpha Results
 
 *Copy this template after the test window closes. Fill in the sections.*
 
@@ -23,7 +23,7 @@
 
 ## Testers
 
-| Tester | OS | Provider | Model | Setup ✓ | Advisory ✓ | CTM ✓ | Dashboard ✓ | Export ✓ | Notes |
+| Tester | OS | Provider | Model | Setup âœ“ | Advisory âœ“ | CTM âœ“ | Dashboard âœ“ | Export âœ“ | Notes |
 |---|---|---|---|---|---|---|---|---|---|
 | | | | | | | | | | |
 | | | | | | | | | | |
@@ -57,14 +57,14 @@
 
 | Criterion | Target | Actual | Pass? |
 |---|---|---|---|
-| Successful installs | ≥ 3 | | |
-| Setup + Doctor completed | ≥ 2 | | |
-| Advisory command completed | ≥ 2 | | |
-| Dashboard opened | ≥ 1 | | |
-| Session exported | ≥ 1 | | |
+| Successful installs | â‰¥ 3 | | |
+| Setup + Doctor completed | â‰¥ 2 | | |
+| Advisory command completed | â‰¥ 2 | | |
+| Dashboard opened | â‰¥ 1 | | |
+| Session exported | â‰¥ 1 | | |
 | No critical safety issue | Required | | |
 | Advisory mode never modified source | Required | | |
-| Actionable feedback items | ≥ 5 | | |
+| Actionable feedback items | â‰¥ 5 | | |
 
 ---
 
@@ -100,7 +100,7 @@
 
 ## High Priority Fixes for alpha.2
 
-*High severity issues targeted for v0.1.0-alpha.2.*
+*High severity issues targeted for v0.1.0-alpha.1.*
 
 | ID | Summary | Area |
 |---|---|---|
@@ -131,16 +131,16 @@
 
 Based on success criteria evaluation:
 
-- [ ] **Proceed to v0.1.0-alpha.2** — minimum criteria met, fixes scoped
-- [ ] **Extend alpha.1 window** — insufficient participation; invite more testers
-- [ ] **Re-run alpha.1 after fix** — critical issue found and fixed
-- [ ] **Pause Alpha** — critical unresolved issue; re-scope required
+- [ ] **Proceed to v0.1.0-alpha.1** â€” minimum criteria met, fixes scoped
+- [ ] **Extend alpha.1 window** â€” insufficient participation; invite more testers
+- [ ] **Re-run alpha.1 after fix** â€” critical issue found and fixed
+- [ ] **Pause Alpha** â€” critical unresolved issue; re-scope required
 
 **Rationale:**
 
 ---
 
-## Scope for v0.1.0-alpha.2
+## Scope for v0.1.0-alpha.1
 
 *Summarize what will be fixed or improved in the next release.*
 
@@ -158,3 +158,5 @@ Based on success criteria evaluation:
 
 -
 -
+
+

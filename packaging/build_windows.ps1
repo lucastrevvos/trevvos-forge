@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Build the Trevvos Forge standalone binary for Windows x64.
@@ -19,25 +19,25 @@ $ZipName  = "trevvos-forge-v$Version-windows-x64.zip"
 $ZipPath  = "release\$ZipName"
 
 Write-Host ""
-Write-Host "=== Trevvos Forge Binary Build — Windows x64 ==="
+Write-Host "=== Trevvos Forge Binary Build â€” Windows x64 ==="
 Write-Host "Version : $Version"
 Write-Host "Output  : $ZipPath"
 Write-Host ""
 
-# ── 1. Install / refresh build deps ────────────────────────────────────────
+# â”€â”€ 1. Install / refresh build deps â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Write-Host "--- Installing build dependencies..."
 python -m pip install -U pip --quiet
 python -m pip install -e . --quiet
 python -m pip install pyinstaller --quiet
 
-# ── 2. Clean previous outputs ───────────────────────────────────────────────
+# â”€â”€ 2. Clean previous outputs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Write-Host "--- Cleaning previous build artefacts..."
 foreach ($dir in @("build", "dist", "release")) {
     if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
 }
 New-Item -ItemType Directory -Force release | Out-Null
 
-# ── 3. Build with PyInstaller ────────────────────────────────────────────────
+# â”€â”€ 3. Build with PyInstaller â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Write-Host "--- Running PyInstaller..."
 python -m PyInstaller `
     --name $AppName `
@@ -59,7 +59,7 @@ python -m PyInstaller `
     --add-data "docs;docs" `
     packaging\trevvos_entry.py
 
-# ── 4. Smoke-test the binary ─────────────────────────────────────────────────
+# â”€â”€ 4. Smoke-test the binary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Write-Host ""
 Write-Host "--- Validating binary..."
 $Bin = "dist\$AppName\$AppName.exe"
@@ -82,7 +82,7 @@ Write-Host "  $Bin doctor --help"
 Write-Host "  $Bin api start --help"
 & $Bin api start --help | Select-Object -First 3
 
-# ── 5. Package as ZIP ────────────────────────────────────────────────────────
+# â”€â”€ 5. Package as ZIP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 Write-Host ""
 Write-Host "--- Creating ZIP..."
 
@@ -118,3 +118,4 @@ Write-Host "  cd trevvos"
 Write-Host "  .\$AppName.exe setup"
 Write-Host "  .\$AppName.exe doctor"
 Write-Host "  .\$AppName.exe api start --open"
+

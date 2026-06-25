@@ -1,4 +1,4 @@
-# Alpha Download and Install
+﻿# Alpha Download and Install
 
 This guide is for Alpha testers. No Python, Git, or pip required.
 
@@ -132,7 +132,7 @@ After running any command:
 trevvos sessions export latest
 ```
 
-Review the exported file before sharing — it contains source code and LLM prompts. Secrets in JSON artifacts are masked automatically.
+Review the exported file before sharing â€” it contains source code and LLM prompts. Secrets in JSON artifacts are masked automatically.
 
 Attach the export to your feedback report using the template at [feedback-template.md](feedback-template.md).
 
@@ -141,7 +141,7 @@ Attach the export to your feedback report using the template at [feedback-templa
 ## Troubleshooting
 
 **Windows: "Windows protected your PC"**  
-Click "More info" → "Run anyway".
+Click "More info" â†’ "Run anyway".
 
 **Windows: binary opens and closes instantly**  
 Run from a PowerShell or Command Prompt window, not by double-clicking.
@@ -160,3 +160,5 @@ chmod +x trevvos
 Open `http://127.0.0.1:8765/` manually in a browser.
 
 See [troubleshooting.md](troubleshooting.md) for more.
+
+

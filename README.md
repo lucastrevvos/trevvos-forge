@@ -1,4 +1,4 @@
-# Trevvos Forge
+﻿# Trevvos Forge
 
 Local AI engineering CLI for code analysis, explanations, proposals, specs, diff review, and controlled test generation.
 
@@ -8,9 +8,9 @@ Local AI engineering CLI for code analysis, explanations, proposals, specs, diff
 
 ## What Is Trevvos Forge?
 
-Trevvos Forge is a command-line assistant for software engineering work. It runs locally using your choice of LLM provider — Ollama, LM Studio, or any OpenAI-compatible endpoint — and helps you understand, plan, review, and generate tests without leaving the terminal.
+Trevvos Forge is a command-line assistant for software engineering work. It runs locally using your choice of LLM provider â€” Ollama, LM Studio, or any OpenAI-compatible endpoint â€” and helps you understand, plan, review, and generate tests without leaving the terminal.
 
-Its recommended workflow is advisory: inspect a project, analyze code, explain flows, generate proposals and handoff specs, review diffs, and inspect test coverage — all without modifying code by default.
+Its recommended workflow is advisory: inspect a project, analyze code, explain flows, generate proposals and handoff specs, review diffs, and inspect test coverage â€” all without modifying code by default.
 
 Controlled Testing Mode adds sandboxed, auditable test generation: `trevvos tests add` generates a test patch, validates it in a sandbox, and only applies it via the explicit `trevvos tests apply` command.
 
@@ -19,7 +19,7 @@ Forge also includes a local dashboard (`trevvos api start --open`) and session e
 ## What Forge Does Not Do Yet
 
 - Does not replace a developer or guarantee correct code generation.
-- Execution Mode (plan/diff/apply) is experimental — not recommended for Alpha testers unless guided.
+- Execution Mode (plan/diff/apply) is experimental â€” not recommended for Alpha testers unless guided.
 - Does not download or manage AI models automatically.
 - Does not sync sessions to the cloud.
 - Managed llama.cpp runtime is not yet implemented.
@@ -29,7 +29,7 @@ Forge also includes a local dashboard (`trevvos api start --open`) and session e
 
 ## Download Alpha
 
-The current Alpha release is available as standalone binaries — no Python, Git, or pip required.
+The current Alpha release is available as standalone binaries â€” no Python, Git, or pip required.
 
 | Platform | Download |
 |---|---|
@@ -46,14 +46,14 @@ Forge is currently in a closed technical Alpha.
 
 See:
 
-- [ALPHA.md](ALPHA.md) — Alpha overview and safety notes
-- [docs/alpha-download-install.md](docs/alpha-download-install.md) — Download and install guide
-- [docs/alpha-tester-invite.md](docs/alpha-tester-invite.md) — Tester invite (English and Portuguese)
-- [docs/alpha-quickstart.md](docs/alpha-quickstart.md) — First steps and provider setup
-- [docs/alpha-test-plan.md](docs/alpha-test-plan.md) — Guided test plan for Alpha testers
-- [docs/alpha-success-criteria.md](docs/alpha-success-criteria.md) — Success and pause criteria for the Alpha run
-- [docs/feedback-template.md](docs/feedback-template.md) — Bug report template
-- [docs/known-limitations.md](docs/known-limitations.md) — Known limitations and experimental commands
+- [ALPHA.md](ALPHA.md) â€” Alpha overview and safety notes
+- [docs/alpha-download-install.md](docs/alpha-download-install.md) â€” Download and install guide
+- [docs/alpha-tester-invite.md](docs/alpha-tester-invite.md) â€” Tester invite (English and Portuguese)
+- [docs/alpha-quickstart.md](docs/alpha-quickstart.md) â€” First steps and provider setup
+- [docs/alpha-test-plan.md](docs/alpha-test-plan.md) â€” Guided test plan for Alpha testers
+- [docs/alpha-success-criteria.md](docs/alpha-success-criteria.md) â€” Success and pause criteria for the Alpha run
+- [docs/feedback-template.md](docs/feedback-template.md) â€” Bug report template
+- [docs/known-limitations.md](docs/known-limitations.md) â€” Known limitations and experimental commands
 
 ---
 
@@ -161,7 +161,7 @@ API keys are read from the environment variable. Forge does not save `api_key` t
 
 ## Modes
 
-### Advisory Mode — Recommended
+### Advisory Mode â€” Recommended
 
 Advisory Mode is the recommended daily mode. These commands are read-only: they do not modify code, do not generate patches, and do not apply changes.
 
@@ -189,13 +189,13 @@ python -m unittest discover -s tests
 
 The flow:
 
-1. `tests inspect` — shows coverage without calling the provider.
-2. `tests add` — generates a test patch, runs it in a sandbox, saves artifacts. Does **not** modify the working tree by default.
-3. `tests apply` — applies the already-validated patch. No LLM call at apply time.
+1. `tests inspect` â€” shows coverage without calling the provider.
+2. `tests add` â€” generates a test patch, runs it in a sandbox, saves artifacts. Does **not** modify the working tree by default.
+3. `tests apply` â€” applies the already-validated patch. No LLM call at apply time.
 
 See [docs/controlled-testing-mode.md](docs/controlled-testing-mode.md).
 
-### Execution Mode — Experimental
+### Execution Mode â€” Experimental
 
 Execution Mode can plan changes, generate diffs, apply patches, and commit. It is experimental and not recommended for Alpha testers unless guided.
 
@@ -349,7 +349,7 @@ trevvos sessions export latest --format json
 trevvos sessions export <session-id>
 ```
 
-Secrets in JSON artifacts are masked automatically. Review the export before sharing — it may contain source code and prompts.
+Secrets in JSON artifacts are masked automatically. Review the export before sharing â€” it may contain source code and prompts.
 
 ---
 
@@ -515,7 +515,7 @@ trevvos propose "improve testability" --target src/domain --language pt-BR
 
 ## Current Status
 
-Alpha — active development.
+Alpha â€” active development.
 
 Stable for Alpha testing:
 
@@ -549,3 +549,5 @@ Not yet implemented:
 ## License
 
 License information has not been added yet.
+
+

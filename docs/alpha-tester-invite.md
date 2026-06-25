@@ -1,14 +1,14 @@
-# Trevvos Forge Closed Alpha Invite
+﻿# Trevvos Forge Closed Alpha Invite
 
 ---
 
 ## English
 
-Hi! You are invited to test **Trevvos Forge v0.1.0-alpha.1** — a local-first AI engineering CLI.
+Hi! You are invited to test **Trevvos Forge v0.1.0-alpha.1** â€” a local-first AI engineering CLI.
 
 **What is Trevvos Forge?**
 
-A command-line tool that helps developers understand, analyze, review, and test code using local or API-hosted LLMs (Ollama, LM Studio, OpenAI API). It runs entirely on your machine — no cloud, no uploads, no account required.
+A command-line tool that helps developers understand, analyze, review, and test code using local or API-hosted LLMs (Ollama, LM Studio, OpenAI API). It runs entirely on your machine â€” no cloud, no uploads, no account required.
 
 **Key workflows:**
 - Analyze and explain code
@@ -64,8 +64,8 @@ trevvos sessions export latest
 **Please test with a non-sensitive project** for this Alpha. The tool reads source files to build context for the LLM. Session exports may contain source code and LLM prompts.
 
 **Please avoid:**
-- Using Execution Mode commands (`plan`, `diff`, `apply`, `repair`, `work`) unless specifically guided — they are experimental.
-- Assuming generated output is correct — advisory mode produces suggestions, not verified facts.
+- Using Execution Mode commands (`plan`, `diff`, `apply`, `repair`, `work`) unless specifically guided â€” they are experimental.
+- Assuming generated output is correct â€” advisory mode produces suggestions, not verified facts.
 
 **Report feedback:**
 
@@ -77,9 +77,9 @@ When something fails, please export the session and attach it:
 trevvos sessions export latest
 ```
 
-Review the export before sharing — it contains source code. Secrets in JSON artifacts are masked automatically.
+Review the export before sharing â€” it contains source code. Secrets in JSON artifacts are masked automatically.
 
-**Expected test time:** 1–3 hours over the test window.
+**Expected test time:** 1â€“3 hours over the test window.
 
 **Test window:** [fill in dates]
 
@@ -87,24 +87,24 @@ Thank you!
 
 ---
 
-## Português
+## PortuguÃªs
 
-Olá! Você está convidado(a) para testar o **Trevvos Forge v0.1.0-alpha.1** — um CLI de engenharia de software com IA local.
+OlÃ¡! VocÃª estÃ¡ convidado(a) para testar o **Trevvos Forge v0.1.0-alpha.1** â€” um CLI de engenharia de software com IA local.
 
-**O que é o Trevvos Forge?**
+**O que Ã© o Trevvos Forge?**
 
-Uma ferramenta de linha de comando que ajuda desenvolvedores a entender, analisar, revisar e testar código usando LLMs locais ou via API (Ollama, LM Studio, OpenAI API). Roda inteiramente na sua máquina — sem cloud, sem uploads, sem conta necessária.
+Uma ferramenta de linha de comando que ajuda desenvolvedores a entender, analisar, revisar e testar cÃ³digo usando LLMs locais ou via API (Ollama, LM Studio, OpenAI API). Roda inteiramente na sua mÃ¡quina â€” sem cloud, sem uploads, sem conta necessÃ¡ria.
 
 **Principais fluxos:**
-- Analisar e explicar código
-- Gerar propostas técnicas e specs de implementação
+- Analisar e explicar cÃ³digo
+- Gerar propostas tÃ©cnicas e specs de implementaÃ§Ã£o
 - Revisar diffs antes de commitar
-- Gerar patches de testes unitários em fluxo sandboxed
-- Dashboard local para navegar sessões
+- Gerar patches de testes unitÃ¡rios em fluxo sandboxed
+- Dashboard local para navegar sessÃµes
 
-**Instalação (sem Python ou Git necessário):**
+**InstalaÃ§Ã£o (sem Python ou Git necessÃ¡rio):**
 
-Baixe o binário standalone para o seu OS na GitHub Release:
+Baixe o binÃ¡rio standalone para o seu OS na GitHub Release:
 
 Windows x64:
 ```powershell
@@ -122,7 +122,7 @@ cd trevvos
 ./trevvos --version
 ```
 
-Guia completo de instalação: veja `docs/alpha-download-install.md` incluso no arquivo.
+Guia completo de instalaÃ§Ã£o: veja `docs/alpha-download-install.md` incluso no arquivo.
 
 **O que testar primeiro:**
 
@@ -142,30 +142,32 @@ trevvos analyze <arquivo>
 # 5. Abrir o dashboard
 trevvos api start --open
 
-# 6. Exportar sessão para o relatório
+# 6. Exportar sessÃ£o para o relatÃ³rio
 trevvos sessions export latest
 ```
 
-**Por favor, teste com um projeto não sensível** neste Alpha. A ferramenta lê arquivos fonte para construir contexto para o LLM. Exports de sessão podem conter código fonte e prompts do LLM.
+**Por favor, teste com um projeto nÃ£o sensÃ­vel** neste Alpha. A ferramenta lÃª arquivos fonte para construir contexto para o LLM. Exports de sessÃ£o podem conter cÃ³digo fonte e prompts do LLM.
 
 **Por favor, evite:**
-- Usar comandos do Execution Mode (`plan`, `diff`, `apply`, `repair`, `work`) sem orientação — são experimentais.
-- Assumir que o output gerado é sempre correto — o modo advisory produz sugestões, não fatos verificados.
+- Usar comandos do Execution Mode (`plan`, `diff`, `apply`, `repair`, `work`) sem orientaÃ§Ã£o â€” sÃ£o experimentais.
+- Assumir que o output gerado Ã© sempre correto â€” o modo advisory produz sugestÃµes, nÃ£o fatos verificados.
 
 **Como reportar:**
 
 Abra uma issue no GitHub usando o template Alpha Feedback, ou envie diretamente para o mantenedor.
 
-Quando algo falhar, exporte a sessão e anexe ao relatório:
+Quando algo falhar, exporte a sessÃ£o e anexe ao relatÃ³rio:
 
 ```bash
 trevvos sessions export latest
 ```
 
-Revise o export antes de compartilhar — contém código fonte. Segredos em artefatos JSON são mascarados automaticamente.
+Revise o export antes de compartilhar â€” contÃ©m cÃ³digo fonte. Segredos em artefatos JSON sÃ£o mascarados automaticamente.
 
-**Tempo estimado:** 1–3 horas no período de teste.
+**Tempo estimado:** 1â€“3 horas no perÃ­odo de teste.
 
 **Janela de teste:** [preencher datas]
 
 Obrigado(a)!
+
+

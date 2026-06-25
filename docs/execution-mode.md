@@ -1,4 +1,4 @@
-# Execution Mode
+﻿# Execution Mode
 
 Execution Mode is experimental.
 
@@ -160,3 +160,5 @@ Prefer Advisory Mode when:
 - local model quality is uncertain;
 - you want a proposal or handoff instead of automatic editing;
 - you need a review before commit.
+
+

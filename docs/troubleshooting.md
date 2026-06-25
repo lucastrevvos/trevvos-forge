@@ -1,4 +1,4 @@
-# Troubleshooting
+﻿# Troubleshooting
 
 ---
 
@@ -241,3 +241,5 @@ Include in your report:
 - Expected vs actual behavior
 
 See [alpha-quickstart.md](alpha-quickstart.md) for setup guides.
+
+

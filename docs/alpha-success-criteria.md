@@ -1,4 +1,4 @@
-# Alpha Success Criteria
+﻿# Alpha Success Criteria
 
 Objective criteria for evaluating the outcome of the Trevvos Forge v0.1.0-alpha.1 test run.
 
@@ -10,14 +10,14 @@ The Alpha is considered **successful** if all of the following are met:
 
 | Criterion | Target |
 |---|---|
-| Successful installs (binary works on first launch) | ≥ 3 testers |
-| Setup + Doctor completed | ≥ 2 testers |
-| Advisory command completed successfully | ≥ 2 testers |
-| Dashboard opened | ≥ 1 tester |
-| Session exported | ≥ 1 tester |
+| Successful installs (binary works on first launch) | â‰¥ 3 testers |
+| Setup + Doctor completed | â‰¥ 2 testers |
+| Advisory command completed successfully | â‰¥ 2 testers |
+| Dashboard opened | â‰¥ 1 tester |
+| Session exported | â‰¥ 1 tester |
 | No critical safety issue found | Required |
 | Advisory mode never modifies source code | Required |
-| Actionable feedback items collected | ≥ 5 |
+| Actionable feedback items collected | â‰¥ 5 |
 
 All "Required" criteria must pass. The numeric targets are minimums.
 
@@ -40,12 +40,12 @@ If minimum criteria are met, these indicate a stronger Alpha:
 
 | Criterion | Target |
 |---|---|
-| Controlled Testing Mode completed (tests add + apply) | ≥ 1 tester |
-| At least 1 tester used Ollama | ✓ |
-| At least 1 tester used openai-compatible | ✓ |
-| Issues reported are medium/low severity (no critical) | ✓ |
-| Session exports received with no privacy concerns | ✓ |
-| Testers express willingness to test again | ≥ 2 |
+| Controlled Testing Mode completed (tests add + apply) | â‰¥ 1 tester |
+| At least 1 tester used Ollama | âœ“ |
+| At least 1 tester used openai-compatible | âœ“ |
+| Issues reported are medium/low severity (no critical) | âœ“ |
+| Session exports received with no privacy concerns | âœ“ |
+| Testers express willingness to test again | â‰¥ 2 |
 
 ---
 
@@ -72,7 +72,7 @@ Based on results, the following decisions are possible:
 | Situation | Decision |
 |---|---|
 | All minimum criteria met, no critical bugs | Proceed to alpha.2 with fixes |
-| Minimum criteria met, 1–2 high-priority bugs | alpha.2 with targeted fixes |
+| Minimum criteria met, 1â€“2 high-priority bugs | alpha.2 with targeted fixes |
 | < 3 successful installs, root cause identifiable | Fix installer, re-run alpha.1 |
 | Critical safety issue found and fixed | Re-run alpha.1 after fix |
 | Insufficient testers participated | Extend window or invite more |
@@ -101,7 +101,7 @@ Session exports received:
 
 ## alpha.2 Scope Signal
 
-After the Alpha, prioritize for `v0.1.0-alpha.2`:
+After the Alpha, prioritize for `v0.1.0-alpha.1`:
 
 1. All critical bugs (mandatory)
 2. High-priority bugs affecting > 1 tester
@@ -111,3 +111,5 @@ After the Alpha, prioritize for `v0.1.0-alpha.2`:
 6. Provider issues for a major provider
 
 Do not include new features in alpha.2 unless the core flow is unblocked.
+
+

@@ -1,4 +1,4 @@
-# Controlled Testing Mode
+﻿# Controlled Testing Mode
 
 Controlled Testing Mode is an auditable, sandboxed workflow for generating unit tests. It only modifies test files, never production source code.
 
@@ -9,13 +9,13 @@ The mode is suitable for Alpha testing. It is distinct from Advisory Mode (read-
 ## The Flow
 
 ```
-trevvos tests inspect <file>      ← coverage report, no LLM call
-         ↓
-trevvos tests add <file>          ← generates patch, validates in sandbox
-         ↓ (review artifacts)
-trevvos tests apply --latest      ← applies validated patch to working tree
-         ↓
-python -m unittest discover -s tests  ← run tests
+trevvos tests inspect <file>      â† coverage report, no LLM call
+         â†“
+trevvos tests add <file>          â† generates patch, validates in sandbox
+         â†“ (review artifacts)
+trevvos tests apply --latest      â† applies validated patch to working tree
+         â†“
+python -m unittest discover -s tests  â† run tests
 ```
 
 Each step is explicit. No automatic apply. No LLM call at apply time.
@@ -109,13 +109,13 @@ After `tests add`, artifacts are saved to:
 
 ```text
 .trevvos/sessions/<session-id>/
-  metadata.json           ← session id, status, timestamps
-  test_patch.diff         ← the generated patch
-  sandbox_result.json     ← sandbox validation result
-  selected_files.json     ← files selected as context
-  system_prompt.txt       ← system prompt used
-  user_prompt.txt         ← user prompt used
-  raw_llm_response.txt    ← raw LLM response
+  metadata.json           â† session id, status, timestamps
+  test_patch.diff         â† the generated patch
+  sandbox_result.json     â† sandbox validation result
+  selected_files.json     â† files selected as context
+  system_prompt.txt       â† system prompt used
+  user_prompt.txt         â† user prompt used
+  raw_llm_response.txt    â† raw LLM response
 ```
 
 Review artifacts before applying:
@@ -147,7 +147,7 @@ trevvos sessions export latest --format json
 ## Safety Properties
 
 - Controlled Testing Mode only modifies test files, never production source.
-- `tests add` does not modify the working tree during generation — the sandbox runs in a temporary directory.
+- `tests add` does not modify the working tree during generation â€” the sandbox runs in a temporary directory.
 - `tests apply` requires explicit invocation. There is no automatic apply.
 - `tests apply` uses `git apply --check` before applying. If the patch is already applied, it exits cleanly.
 - Session artifacts are preserved for audit: the patch, sandbox result, prompts, and metadata are all saved.
@@ -159,9 +159,9 @@ trevvos sessions export latest --format json
 ## Retry Budget
 
 If the provider generates an invalid patch, `tests add` retries automatically:
-- Structure validation failure (malformed JSON or code) → retry with clarified prompt
-- Diff application failure → retry with error context
-- Sandbox test failure → retry with failure context
+- Structure validation failure (malformed JSON or code) â†’ retry with clarified prompt
+- Diff application failure â†’ retry with error context
+- Sandbox test failure â†’ retry with failure context
 
 The default retry budget is 3 attempts. When all retries are exhausted, the session is saved as `failed`.
 
@@ -208,3 +208,5 @@ Run `trevvos sessions show <id>` and check `sandbox_result.json`. The failure re
 `tests apply --latest` skips sessions with obsolete patches. Generate a new patch with `tests add`.
 
 See [troubleshooting.md](troubleshooting.md) for more.
+
+

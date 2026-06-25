@@ -1,4 +1,4 @@
-# Alpha Test Plan
+﻿# Alpha Test Plan
 
 This is the guided test plan for Trevvos Forge Alpha testers. Follow the steps in order. Report any issues using the template in [feedback-template.md](feedback-template.md).
 
@@ -8,14 +8,14 @@ This is the guided test plan for Trevvos Forge Alpha testers. Follow the steps i
 
 Have ready:
 
-- A Python project to test against (any real project works — small is fine)
+- A Python project to test against (any real project works â€” small is fine)
 - An LLM provider: Ollama (recommended), LM Studio, or OpenAI API credentials
 
 **Not required:** root access, Docker, cloud accounts.
 
 ---
 
-## Step 0 — Environment Info
+## Step 0 â€” Environment Info
 
 Before running anything, note your environment. You will need this for feedback reports:
 
@@ -33,12 +33,12 @@ Project language:        (Python, Node, .NET, other)
 
 ---
 
-## Step 1 — Install
+## Step 1 â€” Install
 
 **Linux/macOS:**
 
 ```bash
-git clone https://github.com/your-org/trevvos-forge.git
+git clone https://github.com/lucastrevvos/trevvos-forge.git
 cd trevvos-forge
 python -m venv .venv
 source .venv/bin/activate
@@ -49,7 +49,7 @@ trevvos --help
 **Windows PowerShell:**
 
 ```powershell
-git clone https://github.com/your-org/trevvos-forge.git
+git clone https://github.com/lucastrevvos/trevvos-forge.git
 cd trevvos-forge
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -63,7 +63,7 @@ trevvos --help
 
 ---
 
-## Step 2 — Setup
+## Step 2 â€” Setup
 
 Navigate to the project you want to test with:
 
@@ -106,7 +106,7 @@ trevvos setup --provider openai-compatible --base-url https://api.openai.com/v1 
 
 ---
 
-## Step 3 — Doctor
+## Step 3 â€” Doctor
 
 ```bash
 trevvos doctor
@@ -124,7 +124,7 @@ trevvos doctor --json
 
 ---
 
-## Step 4 — Inspect
+## Step 4 â€” Inspect
 
 ```bash
 trevvos inspect
@@ -140,7 +140,7 @@ trevvos inspect --json
 
 ---
 
-## Step 5 — Advisory Mode
+## Step 5 â€” Advisory Mode
 
 Run each command against a real source file in your project. Replace `<file>` with a Python file, a module, or a directory.
 
@@ -173,7 +173,7 @@ trevvos review-diff
 
 ---
 
-## Step 6 — Controlled Testing Mode
+## Step 6 â€” Controlled Testing Mode
 
 Use a small Python file with simple functions for this step. A calculator or utility file works well.
 
@@ -181,7 +181,7 @@ Use a small Python file with simple functions for this step. A calculator or uti
 # 6a. Inspect coverage
 trevvos tests inspect <file>
 
-# 6b. Generate a test patch (sandbox only — does NOT modify working tree)
+# 6b. Generate a test patch (sandbox only â€” does NOT modify working tree)
 trevvos tests add <file> --symbol <function_name>
 
 # 6c. Review the patch before applying
@@ -210,7 +210,7 @@ trevvos review-diff --staged
 
 ---
 
-## Step 7 — Dashboard
+## Step 7 â€” Dashboard
 
 ```bash
 trevvos api start --open
@@ -231,7 +231,7 @@ If `--open` does not open a browser, open `http://127.0.0.1:8765/` manually.
 
 ---
 
-## Step 8 — Session Export
+## Step 8 â€” Session Export
 
 ```bash
 trevvos sessions export latest
@@ -251,7 +251,7 @@ trevvos sessions export latest --format json
 
 ---
 
-## Step 9 — Report Feedback
+## Step 9 â€” Report Feedback
 
 Use [docs/feedback-template.md](feedback-template.md) to structure your report.
 
@@ -276,3 +276,5 @@ Do not test these unless specifically asked:
 - `trevvos commit`
 
 These are part of the experimental Execution Mode and are not ready for external testing.
+
+

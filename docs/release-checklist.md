@@ -1,4 +1,4 @@
-# Alpha Release Checklist
+﻿# Alpha Release Checklist
 
 Internal checklist to complete before sending Forge to Alpha testers.
 
@@ -26,7 +26,7 @@ trevvos api start --help
 
 ---
 
-## Smoke Test — Ollama
+## Smoke Test â€” Ollama
 
 Run these against a small Python project:
 
@@ -56,7 +56,7 @@ trevvos sessions export latest
 
 ---
 
-## Smoke Test — OpenAI-compatible
+## Smoke Test â€” OpenAI-compatible
 
 ```bash
 trevvos setup --provider openai-compatible --base-url http://localhost:1234/v1 --model <model> --yes
@@ -148,7 +148,7 @@ gh release upload v0.1.0-alpha.1 release/* --clobber
 
 ## Release Logistics
 
-- [ ] Testers selected (2–5 developers)
+- [ ] Testers selected (2â€“5 developers)
 - [ ] Testers briefed on scope (advisory + controlled testing; no execution mode)
 - [ ] Testers given the GitHub Release URL and `docs/alpha-download-install.md`
 - [ ] Feedback channel ready (issue tracker, Slack, email, or similar)
@@ -170,7 +170,7 @@ Before sending to testers, prepare a short "known issues" note covering:
 
 ## Closed Alpha Launch
 
-- [ ] Select 2–5 testers (at least 1 Windows, 1 Linux, 1 Ollama, 1 openai-compatible)
+- [ ] Select 2â€“5 testers (at least 1 Windows, 1 Linux, 1 Ollama, 1 openai-compatible)
 - [ ] Customize `docs/alpha-tester-invite.md` with release URL, dates, and feedback channel
 - [ ] Send invite to testers
 - [ ] Confirm testers have the GitHub Release URL
@@ -192,5 +192,7 @@ After Alpha:
 - [ ] Triage all issues with `docs/alpha-feedback-triage.md`
 - [ ] Update `docs/alpha-known-issues.md` with confirmed bugs
 - [ ] Update `docs/known-limitations.md` with newly discovered limitations
-- [ ] Scope `v0.1.0-alpha.2` based on critical and high-priority findings
-- [ ] Tag `v0.1.0-alpha.2` when ready or plan Beta if Alpha goals met
+- [ ] Scope `v0.1.0-alpha.1` based on critical and high-priority findings
+- [ ] Tag `v0.1.0-alpha.1` when ready or plan Beta if Alpha goals met
+
+

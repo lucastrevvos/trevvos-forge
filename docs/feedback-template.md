@@ -1,4 +1,4 @@
-# Trevvos Forge Alpha Feedback
+﻿# Trevvos Forge Alpha Feedback
 
 Copy this template for each bug report or piece of feedback. Fill in the relevant sections.
 
@@ -85,10 +85,12 @@ trevvos sessions export <session_id>
 
 - [ ] I reviewed the session export before attaching.
 - [ ] The export does not contain credentials, private keys, or confidential source code that I cannot share.
-- [ ] Not applicable — I am not attaching an export.
+- [ ] Not applicable â€” I am not attaching an export.
 
 ---
 
 ## Additional Context
 
 *Anything else that may be relevant: model behavior, project characteristics, related commands, workarounds you tried.*
+
+

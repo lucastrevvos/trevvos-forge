@@ -1,4 +1,4 @@
-# Known Limitations
+﻿# Known Limitations
 
 This document lists known limitations and constraints in Trevvos Forge Alpha. Being transparent about these helps testers focus on the right areas and avoid frustration.
 
@@ -45,7 +45,7 @@ Use `trevvos tests apply` (Controlled Testing Mode) instead for any apply workfl
 ## Advisory Mode
 
 - **`review-diff` requires local git changes to show anything.** If there are no uncommitted changes, the output will be empty or minimal.
-- **`spec` generates a prompt for an external AI, not an implementation.** Use it to hand off a task to Copilot, Codex, or similar — it does not implement changes itself.
+- **`spec` generates a prompt for an external AI, not an implementation.** Use it to hand off a task to Copilot, Codex, or similar â€” it does not implement changes itself.
 - **Report quality depends on how much context Forge can gather.** Projects with unusual structures or no Python/Node/.NET markers may produce generic reports.
 
 ---
@@ -92,3 +92,5 @@ Use `trevvos tests apply` (Controlled Testing Mode) instead for any apply workfl
 
 - **Windows support is best-effort.** The core workflows are tested on Windows but some edge cases may differ from Linux/macOS.
 - **Python 3.11+ required.** Earlier versions are not supported.
+
+

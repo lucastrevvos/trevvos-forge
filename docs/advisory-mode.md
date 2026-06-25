@@ -1,4 +1,4 @@
-# Advisory Mode
+﻿# Advisory Mode
 
 Advisory Mode is the recommended mode for the current Trevvos Forge MVP.
 
@@ -118,7 +118,7 @@ trevvos tests inspect calculator.py --symbol divide
 trevvos tests inspect --json
 ```
 
-This is an advisory command — it does not modify code and does not create patches. To generate tests, use Controlled Testing Mode (`trevvos tests add`).
+This is an advisory command â€” it does not modify code and does not create patches. To generate tests, use Controlled Testing Mode (`trevvos tests add`).
 
 ## Example Advisory Workflow
 
@@ -160,3 +160,5 @@ Advisory Mode:
 - does not claim tests were run unless evidence is provided.
 
 Developer judgment still matters. Advisory reports are guidance, not proof of correctness.
+
+

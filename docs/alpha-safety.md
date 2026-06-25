@@ -1,4 +1,4 @@
-# Safety Model
+﻿# Safety Model
 
 Trevvos Forge is designed to be safe by default. This document describes the safety properties of each workflow.
 
@@ -30,7 +30,7 @@ Controlled Testing Mode is designed to apply changes in a bounded, auditable way
 
 ```bash
 trevvos tests inspect     # read-only, no LLM call
-trevvos tests add         # sandbox only — does NOT modify working tree
+trevvos tests add         # sandbox only â€” does NOT modify working tree
 trevvos tests apply       # explicit apply, test files only
 ```
 
@@ -59,7 +59,7 @@ Execution Mode commands may modify production source code and should not be used
 trevvos plan      # plans changes (read-only)
 trevvos diff      # generates a patch (read-only)
 trevvos repair    # generates a repair patch (read-only)
-trevvos apply     # MODIFIES WORKING TREE — requires confirmation
+trevvos apply     # MODIFIES WORKING TREE â€” requires confirmation
 trevvos work      # agent loop, may reach apply
 trevvos commit    # CREATES GIT COMMIT
 ```
@@ -81,7 +81,7 @@ Session data is written to `.trevvos/sessions/<id>/` under the project root. Typ
 - Metadata (timing, provider, model, status)
 - Selected source files used as context
 
-Forge does **not** send data to any external service — only to the configured LLM provider endpoint.
+Forge does **not** send data to any external service â€” only to the configured LLM provider endpoint.
 
 ### API Keys
 
@@ -89,7 +89,7 @@ Forge does **not** send data to any external service — only to the configured 
 - Set `TREVVOS_FORGE_API_KEY` in the environment when using OpenAI or other API-key-based providers.
 - The local API masks secrets in JSON responses (keys matching `api_key`, `token`, `secret`, `password`, `authorization`, `auth` are replaced with `"present"`).
 - Session exports mask the same keys in JSON artifacts.
-- Source files in exports are not redacted — review before sharing.
+- Source files in exports are not redacted â€” review before sharing.
 
 ### Local API
 
@@ -116,11 +116,13 @@ Secrets in JSON artifacts are masked automatically. Source file content is not r
 
 | Feature | Safe? | Notes |
 |---|---|---|
-| Advisory commands | Yes — read-only | No code changes possible |
-| `tests inspect` | Yes — read-only | No LLM call |
-| `tests add` | Yes — sandbox only | Working tree unchanged |
-| `tests apply` | Bounded — test files only | Explicit invocation required |
+| Advisory commands | Yes â€” read-only | No code changes possible |
+| `tests inspect` | Yes â€” read-only | No LLM call |
+| `tests add` | Yes â€” sandbox only | Working tree unchanged |
+| `tests apply` | Bounded â€” test files only | Explicit invocation required |
 | `trevvos apply` | Experimental | Modifies working tree after confirmation |
-| Local API | Yes — read-only | Localhost only, secrets masked |
+| Local API | Yes â€” read-only | Localhost only, secrets masked |
 | Session export | Yes | Review before sharing |
 | `api_key` in config | No | Never saved to disk by setup |
+
+

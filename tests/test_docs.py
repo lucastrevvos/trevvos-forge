@@ -70,6 +70,61 @@ class DocumentationTests(unittest.TestCase):
         self.assertIn("cd path/to/your/project", readme)
         self.assertIn("cd path/to/your/project", advisory)
 
+    # -----------------------------------------------------------------------
+    # Marco 81: new docs and content
+    # -----------------------------------------------------------------------
+
+    def test_readme_mentions_controlled_testing_and_setup(self) -> None:
+        readme = _read("README.md")
+
+        self.assertIn("Controlled Testing Mode", readme)
+        self.assertIn("trevvos setup", readme)
+        self.assertIn("openai-compatible", readme)
+        self.assertIn("trevvos api start --open", readme)
+
+    def test_new_docs_exist(self) -> None:
+        self.assertTrue((ROOT / "docs" / "alpha-quickstart.md").exists())
+        self.assertTrue((ROOT / "docs" / "providers.md").exists())
+        self.assertTrue((ROOT / "docs" / "controlled-testing-mode.md").exists())
+        self.assertTrue((ROOT / "docs" / "local-api-dashboard.md").exists())
+        self.assertTrue((ROOT / "docs" / "troubleshooting.md").exists())
+
+    def test_controlled_testing_docs_cover_full_flow(self) -> None:
+        text = _read("docs/controlled-testing-mode.md").lower()
+
+        self.assertIn("sandbox", text)
+        self.assertIn("tests add", text)
+        self.assertIn("tests apply", text)
+        self.assertIn("tests inspect", text)
+        self.assertIn("does not modify", text)
+        self.assertIn("git apply", text)
+
+    def test_providers_docs_cover_ollama_and_openai_compatible(self) -> None:
+        text = _read("docs/providers.md").lower()
+
+        self.assertIn("ollama", text)
+        self.assertIn("openai-compatible", text)
+        self.assertIn("api_key", text)
+        self.assertIn("trevvos_forge_api_key", text)
+        self.assertIn("lm studio", text)
+
+    def test_troubleshooting_docs_cover_key_topics(self) -> None:
+        text = _read("docs/troubleshooting.md").lower()
+
+        self.assertIn("trevvos doctor", text)
+        self.assertIn("ollama", text)
+        self.assertIn("openai-compatible", text)
+        self.assertIn("trevvos tests apply", text)
+
+    def test_alpha_quickstart_covers_both_providers(self) -> None:
+        text = _read("docs/alpha-quickstart.md").lower()
+
+        self.assertIn("ollama", text)
+        self.assertIn("openai-compatible", text)
+        self.assertIn("trevvos setup", text)
+        self.assertIn("trevvos doctor", text)
+        self.assertIn("trevvos tests add", text)
+
 
 def _read(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")

@@ -41,6 +41,7 @@ Override the language for a single advisory command with `--language`.
 - Generates technical proposals before implementation.
 - Generates implementation handoff prompts for external coding AIs.
 - Reviews local git diffs before commit.
+- Inspects test coverage by source symbol (no LLM call).
 - Saves session artifacts for auditability.
 
 ## Commands
@@ -106,6 +107,18 @@ Reviews local changes before commit.
 trevvos review-diff
 trevvos review-diff --staged
 ```
+
+### `trevvos tests inspect`
+
+Inspects detected test coverage for a source file by symbol. Does not call the provider.
+
+```bash
+trevvos tests inspect calculator.py
+trevvos tests inspect calculator.py --symbol divide
+trevvos tests inspect --json
+```
+
+This is an advisory command — it does not modify code and does not create patches. To generate tests, use Controlled Testing Mode (`trevvos tests add`).
 
 ## Example Advisory Workflow
 

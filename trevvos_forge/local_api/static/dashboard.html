@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trevvos Forge Dashboard</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header>
+    <h1>Trevvos Forge Dashboard</h1>
+    <button id="refresh-btn" onclick="loadSessions()">Refresh</button>
+  </header>
+  <main>
+    <aside id="sessions-panel">
+      <h2>Sessions</h2>
+      <ul id="sessions-list"><li class="loading">Loading&hellip;</li></ul>
+    </aside>
+    <section id="session-panel">
+      <h2>Session</h2>
+      <div id="session-details"><p class="placeholder">Select a session</p></div>
+      <h2>Artifacts</h2>
+      <ul id="artifacts-list"></ul>
+      <div id="export-block" class="hidden">
+        <h3>Export this session</h3>
+        <code id="export-cmd"></code>
+        <button onclick="copyExportCmd()">Copy</button>
+      </div>
+    </section>
+    <section id="artifact-panel">
+      <h2>Artifact</h2>
+      <div id="artifact-viewer"><p class="placeholder">Select an artifact</p></div>
+    </section>
+  </main>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

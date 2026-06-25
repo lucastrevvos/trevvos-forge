@@ -1541,6 +1541,9 @@ def runtime_stop(
 # ---------------------------------------------------------------------------
 
 _API_ENDPOINTS = [
+    "GET /",
+    "GET /static/dashboard.css",
+    "GET /static/dashboard.js",
     "GET /health",
     "GET /project/profile",
     "GET /config",
@@ -1561,6 +1564,10 @@ def api_start(
         int,
         typer.Option("--port", help="Port to bind the API server."),
     ] = 8765,
+    open_browser: Annotated[
+        bool,
+        typer.Option("--open", help="Open the dashboard in the default browser after starting."),
+    ] = False,
     path: Annotated[
         Path,
         typer.Option("--path", "-p", help="Workspace root path."),
@@ -1574,15 +1581,21 @@ def api_start(
         )
 
     workspace_root = path.resolve()
+    base_url = f"http://{host}:{port}"
 
     console.print("[bold]Trevvos Forge Local API[/bold]\n")
     console.print(f"Workspace: {workspace_root}")
     console.print(f"Data:      .trevvos")
-    console.print(f"URL:       http://{host}:{port}")
+    console.print(f"URL:       {base_url}")
+    console.print(f"Dashboard: {base_url}/")
     console.print("\nEndpoints:")
     for ep in _API_ENDPOINTS:
         console.print(f"  {ep}")
     console.print(f"\n[dim]Press Ctrl+C to stop.[/dim]\n")
+
+    if open_browser:
+        import webbrowser
+        webbrowser.open(f"{base_url}/")
 
     from trevvos_forge.local_api.app import run_server
     try:
@@ -6795,6 +6808,78 @@ def clean_local_sessions(
     except ForgeError as exc:
         print_error(str(exc))
         raise typer.Exit(code=1)
+
+
+@sessions_app.command("export")
+def export_session_cmd(
+    session_ref: Annotated[
+        str,
+        typer.Argument(help="Session ID, 'latest', or 'current'."),
+    ],
+    export_format: Annotated[
+        str,
+        typer.Option("--format", help="Export format: zip or json.", show_default=True),
+    ] = "zip",
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Output file path. Defaults to trevvos-session-<id>.<ext>."),
+    ] = None,
+    include_large_files: Annotated[
+        bool,
+        typer.Option("--include-large-files", help="Include files larger than --max-file-bytes."),
+    ] = False,
+    max_file_bytes: Annotated[
+        int,
+        typer.Option("--max-file-bytes", help="File size limit for export in bytes."),
+    ] = 1 * 1024 * 1024,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Output result as JSON."),
+    ] = False,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """
+    Export a session to a portable ZIP or JSON file with secrets masked.
+    """
+    from trevvos_forge.session_export import SessionExporter
+
+    timer = CommandTimer()
+    exporter = SessionExporter(workspace_root=path)
+    try:
+        result = exporter.export(
+            session_ref,
+            format=export_format,
+            output_path=output,
+            include_large_files=include_large_files,
+            max_file_bytes=max_file_bytes,
+        )
+    except (SessionError, ValueError) as exc:
+        if json_output:
+            print(json.dumps({"error": str(exc)}, indent=2))
+        else:
+            print_error(str(exc))
+        raise typer.Exit(code=1)
+
+    result_dict = result.to_dict()
+    result_dict["duration_seconds"] = round(timer.duration_seconds, 2)
+
+    if json_output:
+        print(json.dumps(result_dict, indent=2, default=str))
+        return
+
+    console.print(f"[green]Exported[/green] session [bold]{result.session_id}[/bold]")
+    console.print(f"Format:         {result.format}")
+    console.print(f"Output:         {result.output_path}")
+    console.print(f"Files exported: {result.file_count}")
+    console.print(f"Total size:     {result.total_bytes:,} bytes")
+    if result.skipped_symlinks:
+        console.print(f"Skipped (symlinks): {result.skipped_symlinks}")
+    if result.skipped_large_files:
+        console.print(f"Skipped (large):    {result.skipped_large_files}")
+    console.print(f"Duration:       {timer.format()}")
 
 
 @prompts_app.command("list")

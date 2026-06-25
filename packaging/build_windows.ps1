@@ -18,14 +18,15 @@ function Invoke-Native {
         [Parameter(Mandatory = $true)]
         [string] $FilePath,
 
-        [Parameter(ValueFromRemainingArguments = $true)]
-        [string[]] $Arguments
+        [Parameter(Mandatory = $false)]
+        [string[]] $Arguments = @()
     )
 
     & $FilePath @Arguments
 
     if ($LASTEXITCODE -ne 0) {
-        throw "Command failed with exit code $LASTEXITCODE: $FilePath $($Arguments -join ' ')"
+        $message = "Command failed with exit code {0}: {1} {2}" -f $LASTEXITCODE, $FilePath, ($Arguments -join " ")
+        throw $message
     }
 }
 
@@ -41,15 +42,15 @@ Write-Host "Output  : $ZipPath"
 Write-Host ""
 
 Write-Host "--- Python environment..."
-Invoke-Native python --version
+Invoke-Native "python" @("--version")
 python -c "import sys; print(sys.executable)"
 
 # 1. Install / refresh build deps
 Write-Host "--- Installing build dependencies..."
-Invoke-Native python -m pip install -U pip
-Invoke-Native python -m pip install -e .
-Invoke-Native python -m pip install PyInstaller
-Invoke-Native python -m PyInstaller --version
+Invoke-Native "python" @("-m", "pip", "install", "-U", "pip")
+Invoke-Native "python" @("-m", "pip", "install", "-e", ".")
+Invoke-Native "python" @("-m", "pip", "install", "PyInstaller")
+Invoke-Native "python" @("-m", "PyInstaller", "--version")
 
 # 2. Clean previous outputs
 Write-Host "--- Cleaning previous build artifacts..."
@@ -62,25 +63,30 @@ New-Item -ItemType Directory -Force release | Out-Null
 
 # 3. Build with PyInstaller
 Write-Host "--- Running PyInstaller..."
-Invoke-Native python -m PyInstaller `
-    --name $AppName `
-    --onedir `
-    --clean `
-    --noconfirm `
-    --paths "." `
-    --hidden-import=trevvos_forge `
-    --hidden-import=trevvos_forge.cli `
-    --collect-submodules=trevvos_forge `
-    --collect-data=trevvos_forge `
-    --collect-all typer `
-    --collect-all rich `
-    --copy-metadata trevvos-forge `
-    --add-data "trevvos_forge;trevvos_forge" `
-    --add-data "trevvos_forge\local_api\static;trevvos_forge\local_api\static" `
-    --add-data "README.md;." `
-    --add-data "ALPHA.md;." `
-    --add-data "docs;docs" `
-    packaging\trevvos_entry.py
+
+$PyInstallerArgs = @(
+    "-m", "PyInstaller",
+    "--name", $AppName,
+    "--onedir",
+    "--clean",
+    "--noconfirm",
+    "--paths", ".",
+    "--hidden-import=trevvos_forge",
+    "--hidden-import=trevvos_forge.cli",
+    "--collect-submodules=trevvos_forge",
+    "--collect-data=trevvos_forge",
+    "--collect-all", "typer",
+    "--collect-all", "rich",
+    "--copy-metadata", "trevvos-forge",
+    "--add-data", "trevvos_forge;trevvos_forge",
+    "--add-data", "trevvos_forge\local_api\static;trevvos_forge\local_api\static",
+    "--add-data", "README.md;.",
+    "--add-data", "ALPHA.md;.",
+    "--add-data", "docs;docs",
+    "packaging\trevvos_entry.py"
+)
+
+Invoke-Native "python" $PyInstallerArgs
 
 # 4. Smoke-test the binary
 Write-Host ""
@@ -92,10 +98,10 @@ if (!(Test-Path $Bin)) {
 }
 
 Write-Host "  $Bin --version"
-Invoke-Native $Bin --version
+Invoke-Native $Bin @("--version")
 
 Write-Host "  $Bin version"
-Invoke-Native $Bin version
+Invoke-Native $Bin @("version")
 
 Write-Host "  $Bin --help"
 & $Bin --help | Select-Object -First 5

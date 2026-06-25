@@ -1418,6 +1418,192 @@ def doctor(
 
 
 # ---------------------------------------------------------------------------
+# setup command
+# ---------------------------------------------------------------------------
+
+@app.command()
+def setup(
+    provider: Annotated[
+        str | None,
+        typer.Option("--provider", help="Provider: ollama or openai-compatible."),
+    ] = None,
+    runtime: Annotated[
+        str | None,
+        typer.Option("--runtime", help="Runtime: ollama or external."),
+    ] = None,
+    base_url: Annotated[
+        str | None,
+        typer.Option("--base-url", help="Provider base URL."),
+    ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="Model name."),
+    ] = None,
+    language: Annotated[
+        str | None,
+        typer.Option("--language", help="Language for AI responses (en, pt-BR)."),
+    ] = None,
+    test_command: Annotated[
+        list[str] | None,
+        typer.Option("--test-command", help="Test command (repeatable). Skips auto-detection."),
+    ] = None,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Non-interactive: skip prompts and use defaults."),
+    ] = False,
+    no_doctor: Annotated[
+        bool,
+        typer.Option("--no-doctor", help="Skip running doctor checks."),
+    ] = False,
+    no_inspect: Annotated[
+        bool,
+        typer.Option("--no-inspect", help="Skip project inspection and test command detection."),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Show what would be written without saving."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Output result as JSON."),
+    ] = False,
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Workspace root path."),
+    ] = Path("."),
+) -> None:
+    """
+    Set up Trevvos Forge for this workspace (creates/updates .trevvos/config.json).
+    """
+    from trevvos_forge.setup_workflow import SetupRequest, _PROVIDER_DEFAULTS, run_setup
+
+    timer = CommandTimer()
+    workspace_root = path.resolve()
+
+    resolved_provider = provider
+    resolved_base_url = base_url
+    resolved_model = model
+    resolved_runtime = runtime
+    resolved_language = language
+
+    # Interactive mode when --yes not given and not in non-interactive context
+    if not yes and not json_output:
+        try:
+            import sys as _sys
+            is_tty = _sys.stdin.isatty()
+        except Exception:
+            is_tty = False
+
+        if is_tty:
+            try:
+                current_cfg = load_config(workspace_root)
+            except Exception:
+                current_cfg = {}
+
+            console.print("[bold]Trevvos Forge Setup[/bold]\n")
+            console.print(f"Workspace: {workspace_root}\n")
+
+            # Provider
+            cur_prov = current_cfg.get("provider", "ollama")
+            console.print("[bold]Choose provider:[/bold]")
+            console.print("  1. Ollama (local)")
+            console.print("  2. OpenAI-compatible endpoint")
+            prov_default = "1" if cur_prov == "ollama" else "2"
+            prov_choice = typer.prompt("  [1/2]", default=prov_default).strip()
+            if prov_choice == "2":
+                resolved_provider = "openai-compatible"
+            else:
+                resolved_provider = "ollama"
+
+            pd = _PROVIDER_DEFAULTS.get(resolved_provider, {})
+            cur_url = current_cfg.get("base_url", pd.get("base_url", ""))
+            resolved_base_url = typer.prompt("Base URL", default=cur_url).strip() or None
+
+            cur_model = current_cfg.get("model", pd.get("model", ""))
+            resolved_model = typer.prompt("Model", default=cur_model).strip() or None
+
+            # Language
+            cur_lang = current_cfg.get("language", "en")
+            console.print("\n[bold]Language for AI responses:[/bold]")
+            console.print("  1. English (en)")
+            console.print("  2. Portuguese Brazil (pt-BR)")
+            lang_default = "2" if cur_lang == "pt-BR" else "1"
+            lang_choice = typer.prompt("  [1/2]", default=lang_default).strip()
+            resolved_language = "pt-BR" if lang_choice == "2" else "en"
+
+            console.print("")
+
+    request = SetupRequest(
+        workspace_root=workspace_root,
+        provider=resolved_provider,
+        runtime=resolved_runtime,
+        base_url=resolved_base_url,
+        model=resolved_model,
+        language=resolved_language,
+        test_commands=list(test_command) if test_command else None,
+        yes=yes,
+        run_doctor=not no_doctor,
+        run_inspect=not no_inspect,
+        dry_run=dry_run,
+    )
+
+    try:
+        result = run_setup(request)
+    except (ConfigurationError, ValueError) as exc:
+        if json_output:
+            print(json.dumps({"status": "failed", "error": str(exc)}, indent=2))
+        else:
+            print_error(str(exc))
+        raise typer.Exit(code=1)
+
+    result_dict = result.to_dict()
+    result_dict["duration_seconds"] = round(timer.duration_seconds, 2)
+
+    if json_output:
+        print(json.dumps(result_dict, indent=2, default=str))
+        return
+
+    if dry_run:
+        console.print("[bold]Trevvos Forge Setup[/bold] [yellow](dry-run)[/yellow]\n")
+    else:
+        console.print("[bold]Trevvos Forge Setup[/bold]\n")
+
+    console.print(f"Workspace: {workspace_root}\n")
+
+    if result.config_path:
+        console.print(f"[green]Configuration written:[/green] {result.config_path.relative_to(workspace_root)}")
+    else:
+        console.print("[yellow]Configuration not written (dry-run).[/yellow]")
+
+    console.print(f"\nProvider:")
+    console.print(f"  provider: {result.provider}")
+    console.print(f"  runtime:  {result.runtime}")
+    console.print(f"  base_url: {result.base_url}")
+    console.print(f"  model:    {result.model}")
+    console.print(f"\nLanguage:  {result.language}")
+
+    if result.test_commands:
+        console.print(f"\nTest commands:")
+        for cmd in result.test_commands:
+            console.print(f"  {cmd}")
+
+    if result.project_profile_written:
+        console.print("\n[green]Project profile written:[/green] .trevvos/project_profile.json")
+
+    if result.doctor:
+        icon = "[green]✓[/green]" if result.doctor.get("status") == "passed" else "[yellow]![/yellow]"
+        console.print(f"\nDoctor: {icon} {result.doctor.get('status', 'unknown')}")
+
+    console.print(f"\nDuration: {timer.format()}")
+
+    console.print("\n[bold]Next:[/bold]")
+    console.print("  trevvos doctor")
+    console.print("  trevvos inspect")
+    console.print("  trevvos analyze <file>")
+    console.print("  trevvos api start --open")
+
+
+# ---------------------------------------------------------------------------
 # runtime subcommands
 # ---------------------------------------------------------------------------
 
@@ -1602,84 +1788,6 @@ def api_start(
         run_server(workspace_root=workspace_root, host=host, port=port)
     except KeyboardInterrupt:
         console.print("\n[yellow]Server stopped.[/yellow]")
-
-
-@app.command()
-def setup(
-    model: Annotated[
-        str | None,
-        typer.Option("--model", "-m", help="Model to check or pull during setup."),
-    ] = None,
-) -> None:
-    """
-    Setup Trevvos Forge local environment.
-    """
-    try:
-        settings = load_settings()
-        target_model = model or settings.model
-
-        provider = OllamaProvider(
-            model=target_model,
-            base_url=settings.base_url,
-            timeout=settings.timeout,
-        )
-
-        console.print("[bold]Trevvos Forge Setup[/bold]\n")
-
-        console.print("[bold]Settings[/bold]")
-        console.print(f"  Base URL: {settings.base_url}")
-        console.print(f"  Timeout:  {settings.timeout}s")
-        console.print(f"  Model:    {target_model}")
-
-        with console.status("[bold]Checking Ollama...[/bold]", spinner="dots"):
-            models = provider.list_models()
-
-        console.print("\n[bold]Ollama[/bold]")
-        console.print("  Status: [green]OK[/green]")
-
-        if target_model in models:
-            console.print(
-                f"\n[green]Model already available:[/green] [bold]{target_model}[/bold]"
-            )
-            console.print("[green]Setup complete. Trevvos Forge is ready.[/green]")
-            return
-
-        console.print(
-            f"\n[yellow]Model not found locally:[/yellow] [bold]{target_model}[/bold]"
-        )
-
-        should_pull = typer.confirm(
-            f"Do you want to pull {target_model} now?",
-            default=False,
-        )
-
-        if not should_pull:
-            console.print("\n[yellow]Setup stopped.[/yellow]")
-            console.print("You can pull the model later with:")
-            console.print(f"  trevvos models pull {target_model}")
-            raise typer.Exit(code=1)
-
-        console.print(f"\n[bold]Pulling model:[/bold] {target_model}")
-        console.print("[yellow]This can take a while depending on the model size.[/yellow]\n")
-
-        with console.status("[bold]Downloading model with Ollama...[/bold]", spinner="dots"):
-            status = provider.pull_model(target_model)
-
-        console.print(f"\n[green]Model pull finished:[/green] {status}")
-        console.print(f"[green]Setup complete.[/green] Model ready: [bold]{target_model}[/bold]")
-
-        if model and model != settings.model:
-            console.print(
-                "\n[yellow]Note:[/yellow] this model was downloaded, but it is not your default model."
-            )
-            console.print("To use it temporarily:")
-            console.print(f'  TREVVOS_FORGE_MODEL="{model}" trevvos ask "hello"')
-
-    except ForgeError as exc:
-        print_error(str(exc))
-        console.print("\nIf Ollama is not running, start it and try again:")
-        console.print("  ollama serve")
-        raise typer.Exit(code=1)
 
 
 @app.command()

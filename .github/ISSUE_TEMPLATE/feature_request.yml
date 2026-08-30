@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a focused improvement to Trevvos Forge
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What developer problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: Describe the smallest useful behavior or interface.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Advisory Mode
+        - Controlled Testing
+        - Execution Mode
+        - Providers
+        - Runtime
+        - Local API / Dashboard
+        - Session export
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: tradeoffs
+    attributes:
+      label: Trade-offs or alternatives
+      description: Mention alternatives you considered, if any.
